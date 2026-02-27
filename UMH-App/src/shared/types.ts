@@ -14,6 +14,7 @@ export enum DeviceCommand {
   SET_STIMULATION = 0x05,
   SET_PHASES = 0x06,
   SET_DEMO = 0x07,
+  GET_TRANSDUCER_INFO = 0x08,
 }
 
 // Response types (UMH -> PC)
@@ -25,7 +26,14 @@ export enum DeviceResponse {
   RETURN_STATUS = 0x84,
   SACK = 0x85,
   DEMO_ACK = 0x86,
+  TRANSDUCER_INFO = 0x87,
   ERROR = 0xFF,
+}
+
+export interface TransducerPosition {
+  x: number;
+  y: number;
+  z: number;
 }
 
 // Stimulation types
@@ -86,6 +94,7 @@ export const IPC_CHANNELS = {
   DEVICE_COMMAND: 'device:command',
   DEVICE_STATUS: 'device:status', // Event
   DEVICE_CONFIG: 'device:config', // Event
+  DEVICE_TRANSDUCER_LAYOUT: 'device:transducer-layout', // Event
   DEVICE_PING_ACK: 'device:ping-ack', // Event
   DEVICE_ACK: 'device:ack', // Event
 };

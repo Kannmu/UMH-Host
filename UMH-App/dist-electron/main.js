@@ -14,6 +14,7 @@ var DeviceCommand = /* @__PURE__ */ ((DeviceCommand2) => {
   DeviceCommand2[DeviceCommand2["SET_STIMULATION"] = 5] = "SET_STIMULATION";
   DeviceCommand2[DeviceCommand2["SET_PHASES"] = 6] = "SET_PHASES";
   DeviceCommand2[DeviceCommand2["SET_DEMO"] = 7] = "SET_DEMO";
+  DeviceCommand2[DeviceCommand2["GET_TRANSDUCER_INFO"] = 8] = "GET_TRANSDUCER_INFO";
   return DeviceCommand2;
 })(DeviceCommand || {});
 var DeviceResponse = /* @__PURE__ */ ((DeviceResponse2) => {
@@ -24,6 +25,7 @@ var DeviceResponse = /* @__PURE__ */ ((DeviceResponse2) => {
   DeviceResponse2[DeviceResponse2["RETURN_STATUS"] = 132] = "RETURN_STATUS";
   DeviceResponse2[DeviceResponse2["SACK"] = 133] = "SACK";
   DeviceResponse2[DeviceResponse2["DEMO_ACK"] = 134] = "DEMO_ACK";
+  DeviceResponse2[DeviceResponse2["TRANSDUCER_INFO"] = 135] = "TRANSDUCER_INFO";
   DeviceResponse2[DeviceResponse2["ERROR"] = 255] = "ERROR";
   return DeviceResponse2;
 })(DeviceResponse || {});
@@ -38,6 +40,8 @@ const IPC_CHANNELS = {
   // Event
   DEVICE_CONFIG: "device:config",
   // Event
+  DEVICE_TRANSDUCER_LAYOUT: "device:transducer-layout",
+  // Event
   DEVICE_PING_ACK: "device:ping-ack",
   // Event
   DEVICE_ACK: "device:ack"
@@ -48,6 +52,7 @@ const HEADER_BYTE_2 = 85;
 const TAIL_BYTE_1 = 13;
 const TAIL_BYTE_2 = 10;
 const FRAME_MIN_LENGTH = 7;
+const MAX_TRANSDUCER_INFO_BATCH = 21;
 class ProtocolParser {
   constructor() {
     __publicField(this, "buffer", Buffer.alloc(0));
@@ -145,9 +150,25 @@ class SerialService extends EventEmitter {
     __publicField(this, "statusPollTimer", null);
     __publicField(this, "protocolParser", new ProtocolParser());
     __publicField(this, "pendingPingTimestamps", /* @__PURE__ */ new Map());
+    __publicField(this, "expectedTransducerCount", 0);
+    __publicField(this, "transducerPositions", []);
   }
   setMainWindow(window) {
     this.mainWindow = window;
+  }
+  safeSend(channel, payload) {
+    if (!this.mainWindow) {
+      return;
+    }
+    if (this.mainWindow.isDestroyed() || this.mainWindow.webContents.isDestroyed()) {
+      this.mainWindow = null;
+      return;
+    }
+    try {
+      this.mainWindow.webContents.send(channel, payload);
+    } catch (error) {
+      console.error(`[SerialService] Failed to send ${channel}:`, error);
+    }
   }
   async listPorts() {
     return await SerialPort.list();
@@ -177,6 +198,7 @@ class SerialService extends EventEmitter {
           console.log("Port opened:", path2);
           this.isConnected = true;
           this.protocolParser.reset();
+          this.resetTransducerLayoutState();
           this.emitStatus("connected");
           (_a = this.port) == null ? void 0 : _a.on("data", (data) => this.handleData(data));
           (_b = this.port) == null ? void 0 : _b.on("close", () => {
@@ -233,6 +255,7 @@ class SerialService extends EventEmitter {
           this.isConnected = false;
           this.stopStatusPolling();
           this.protocolParser.reset();
+          this.resetTransducerLayoutState();
           this.emitStatus("disconnected");
           resolve();
         });
@@ -241,13 +264,12 @@ class SerialService extends EventEmitter {
       this.isConnected = false;
       this.stopStatusPolling();
       this.protocolParser.reset();
+      this.resetTransducerLayoutState();
       this.emitStatus("disconnected");
     }
   }
   emitStatus(status, error) {
-    if (this.mainWindow) {
-      this.mainWindow.webContents.send(IPC_CHANNELS.SERIAL_STATUS, { status, error });
-    }
+    this.safeSend(IPC_CHANNELS.SERIAL_STATUS, { status, error });
   }
   sendCommand(cmdType, payload = Buffer.alloc(0)) {
     if (!this.port || !this.port.isOpen) return;
@@ -276,6 +298,9 @@ class SerialService extends EventEmitter {
       case DeviceResponse.PING_ACK:
         this.handlePingAck(data);
         break;
+      case DeviceResponse.TRANSDUCER_INFO:
+        this.parseTransducerInfo(data);
+        break;
       case DeviceResponse.ACK:
       case DeviceResponse.NACK:
       case DeviceResponse.SACK:
@@ -295,8 +320,44 @@ class SerialService extends EventEmitter {
   requestStatus() {
     this.sendCommand(DeviceCommand.GET_STATUS);
   }
+  requestTransducerInfo(startIndex, count) {
+    if (!this.isConnected || count <= 0) {
+      return;
+    }
+    const payload = Buffer.from([startIndex & 255, count & 255]);
+    this.sendCommand(DeviceCommand.GET_TRANSDUCER_INFO, payload);
+  }
+  resetTransducerLayoutState() {
+    this.expectedTransducerCount = 0;
+    this.transducerPositions = [];
+    this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+  }
+  beginTransducerLayoutFetch(transducerCount) {
+    const roundedCount = Math.max(0, Math.min(255, Math.round(transducerCount)));
+    this.expectedTransducerCount = roundedCount;
+    this.transducerPositions = Array.from({ length: roundedCount }, () => void 0);
+    if (roundedCount === 0) {
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+      return;
+    }
+    this.requestTransducerInfo(0, Math.min(MAX_TRANSDUCER_INFO_BATCH, roundedCount));
+  }
+  requestNextTransducerBatch() {
+    if (this.expectedTransducerCount === 0) {
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+      return;
+    }
+    const nextMissingIndex = this.transducerPositions.findIndex((item) => item === void 0);
+    if (nextMissingIndex < 0) {
+      const layout = this.transducerPositions.filter((item) => item !== void 0);
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, layout);
+      return;
+    }
+    const remaining = this.expectedTransducerCount - nextMissingIndex;
+    const count = Math.min(MAX_TRANSDUCER_INFO_BATCH, remaining);
+    this.requestTransducerInfo(nextMissingIndex, count);
+  }
   handlePingAck(data) {
-    if (!this.mainWindow) return;
     if (data.length < 1) {
       return;
     }
@@ -311,15 +372,14 @@ class SerialService extends EventEmitter {
       rttMs: sentAt !== void 0 ? now - sentAt : -1,
       receivedAt: now
     };
-    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_PING_ACK, payload);
+    this.safeSend(IPC_CHANNELS.DEVICE_PING_ACK, payload);
   }
   emitAck(type, data) {
-    if (!this.mainWindow) return;
     const payload = {
       type,
       dataHex: data.length > 0 ? data.toString("hex") : void 0
     };
-    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_ACK, payload);
+    this.safeSend(IPC_CHANNELS.DEVICE_ACK, payload);
   }
   startStatusPolling() {
     this.stopStatusPolling();
@@ -352,18 +412,46 @@ class SerialService extends EventEmitter {
     const transducerSize = data.readFloatLE(offset);
     offset += 4;
     const transducerSpace = data.readFloatLE(offset);
-    if (this.mainWindow) {
-      const config = {
-        serialNumber,
-        version,
-        arrayType,
-        arraySize,
-        transducerCount,
-        transducerSize,
-        transducerSpace
-      };
-      this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_CONFIG, config);
+    const config = {
+      serialNumber,
+      version,
+      arrayType,
+      arraySize,
+      transducerCount,
+      transducerSize,
+      transducerSpace
+    };
+    this.safeSend(IPC_CHANNELS.DEVICE_CONFIG, config);
+    this.beginTransducerLayoutFetch(transducerCount);
+  }
+  parseTransducerInfo(data) {
+    if (data.length < 2 || this.expectedTransducerCount <= 0) {
+      return;
     }
+    const startIndex = data.readUInt8(0);
+    const count = data.readUInt8(1);
+    const expectedDataLength = 2 + count * 12;
+    if (data.length < expectedDataLength) {
+      return;
+    }
+    for (let i = 0; i < count; i += 1) {
+      const index = startIndex + i;
+      if (index >= this.expectedTransducerCount) {
+        continue;
+      }
+      const offset = 2 + i * 12;
+      this.transducerPositions[index] = {
+        x: data.readFloatLE(offset),
+        y: data.readFloatLE(offset + 4),
+        z: data.readFloatLE(offset + 8)
+      };
+    }
+    if (count === 0) {
+      const layout = this.transducerPositions.filter((item) => item !== void 0);
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, layout);
+      return;
+    }
+    this.requestNextTransducerBatch();
   }
   parseStatus(data) {
     if (data.length < 33) return;
@@ -390,20 +478,18 @@ class SerialService extends EventEmitter {
     offset += 4;
     const phaseSetMode = data.readUInt32LE(offset);
     offset += 4;
-    if (this.mainWindow) {
-      const status = {
-        vdda,
-        v3v3,
-        v5v0,
-        temperature,
-        dmaUpdateStats,
-        loopFreq,
-        stimulationType,
-        calibrationMode,
-        phaseSetMode
-      };
-      this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_STATUS, status);
-    }
+    const status = {
+      vdda,
+      v3v3,
+      v5v0,
+      temperature,
+      dmaUpdateStats,
+      loopFreq,
+      stimulationType,
+      calibrationMode,
+      phaseSetMode
+    };
+    this.safeSend(IPC_CHANNELS.DEVICE_STATUS, status);
   }
 }
 const __dirname$1 = path.dirname(fileURLToPath(import.meta.url));
@@ -427,6 +513,10 @@ function createWindow() {
     }
   });
   serialService.setMainWindow(win);
+  win.on("closed", () => {
+    serialService.setMainWindow(null);
+    win = null;
+  });
   win.webContents.on("did-finish-load", () => {
     win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
   });
@@ -465,6 +555,9 @@ ipcMain.on(IPC_CHANNELS.DEVICE_COMMAND, (_event, cmdType, payload) => {
 });
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
+    serialService.disconnect().catch((error) => {
+      console.error("Error disconnecting serial service during shutdown:", error);
+    });
     app.quit();
     win = null;
   }

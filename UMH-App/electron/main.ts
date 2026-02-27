@@ -41,6 +41,11 @@ function createWindow() {
 
   serialService.setMainWindow(win)
 
+  win.on('closed', () => {
+    serialService.setMainWindow(null)
+    win = null
+  })
+
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-message', (new Date).toLocaleString())
@@ -91,6 +96,9 @@ ipcMain.on(IPC_CHANNELS.DEVICE_COMMAND, (_event, cmdType, payload) => {
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    serialService.disconnect().catch((error) => {
+      console.error('Error disconnecting serial service during shutdown:', error)
+    })
     app.quit()
     win = null
   }

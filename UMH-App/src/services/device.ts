@@ -24,6 +24,12 @@ export const deviceService = {
   
   getConfig: () => deviceService.sendCommand(DeviceCommand.GET_CONFIG),
 
+  getTransducerInfo: (startIndex: number, count: number) =>
+    deviceService.sendCommand(
+      DeviceCommand.GET_TRANSDUCER_INFO,
+      new Uint8Array([startIndex & 0xff, count & 0xff]),
+    ),
+
   setDemo: (index: number) =>
     deviceService.sendCommand(DeviceCommand.SET_DEMO, new Uint8Array([index & 0xff])),
 

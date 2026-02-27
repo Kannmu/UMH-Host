@@ -6,6 +6,7 @@ import {
   IPC_CHANNELS,
   PingAckPayload,
   DeviceAckPayload,
+  TransducerPosition,
 } from '../shared/types';
 
 interface DeviceState {
@@ -15,12 +16,14 @@ interface DeviceState {
   status: DeviceStatus | null;
   lastPing: PingAckPayload | null;
   lastAck: DeviceAckPayload | null;
+  transducerLayout: TransducerPosition[];
   
   setConnectionStatus: (payload: ConnectionStatusPayload) => void;
   setConfig: (config: DeviceConfig) => void;
   setStatus: (status: DeviceStatus) => void;
   setLastPing: (ping: PingAckPayload) => void;
   setLastAck: (ack: DeviceAckPayload) => void;
+  setTransducerLayout: (layout: TransducerPosition[]) => void;
 }
 
 export const useDeviceStore = create<DeviceState>((set) => ({
@@ -30,6 +33,7 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   status: null,
   lastPing: null,
   lastAck: null,
+  transducerLayout: [],
 
   setConnectionStatus: (payload) => set({ 
     connectionStatus: payload.status, 
@@ -39,6 +43,7 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   setStatus: (status) => set({ status }),
   setLastPing: (ping) => set({ lastPing: ping }),
   setLastAck: (ack) => set({ lastAck: ack }),
+  setTransducerLayout: (layout) => set({ transducerLayout: layout }),
 }));
 
 // Initialize listeners
@@ -69,5 +74,9 @@ export const initDeviceListeners = () => {
 
   window.ipcRenderer.on(IPC_CHANNELS.DEVICE_ACK, (_, ack: DeviceAckPayload) => {
     useDeviceStore.getState().setLastAck(ack);
+  });
+
+  window.ipcRenderer.on(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, (_, layout: TransducerPosition[]) => {
+    useDeviceStore.getState().setTransducerLayout(layout);
   });
 };

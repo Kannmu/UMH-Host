@@ -9,6 +9,7 @@ import {
   DeviceStatus,
   DeviceAckPayload,
   PingAckPayload,
+  TransducerPosition,
 } from '../../src/shared/types';
 
 const HEADER_BYTE_1 = 0xAA;
@@ -16,6 +17,7 @@ const HEADER_BYTE_2 = 0x55;
 const TAIL_BYTE_1 = 0x0D;
 const TAIL_BYTE_2 = 0x0A;
 const FRAME_MIN_LENGTH = 7;
+const MAX_TRANSDUCER_INFO_BATCH = 21;
 
 interface ParsedFrame {
   cmdType: number;
@@ -140,13 +142,32 @@ export class SerialService extends EventEmitter {
   private statusPollTimer: NodeJS.Timeout | null = null;
   private protocolParser = new ProtocolParser();
   private pendingPingTimestamps = new Map<number, number>();
+  private expectedTransducerCount: number = 0;
+  private transducerPositions: Array<TransducerPosition | undefined> = [];
 
   constructor() {
     super();
   }
 
-  setMainWindow(window: BrowserWindow) {
+  setMainWindow(window: BrowserWindow | null) {
     this.mainWindow = window;
+  }
+
+  private safeSend(channel: string, payload: unknown) {
+    if (!this.mainWindow) {
+      return;
+    }
+
+    if (this.mainWindow.isDestroyed() || this.mainWindow.webContents.isDestroyed()) {
+      this.mainWindow = null;
+      return;
+    }
+
+    try {
+      this.mainWindow.webContents.send(channel, payload);
+    } catch (error) {
+      console.error(`[SerialService] Failed to send ${channel}:`, error);
+    }
   }
 
   async listPorts() {
@@ -182,6 +203,7 @@ export class SerialService extends EventEmitter {
           console.log('Port opened:', path);
           this.isConnected = true;
           this.protocolParser.reset();
+          this.resetTransducerLayoutState();
           this.emitStatus('connected');
 
           this.port?.on('data', (data) => this.handleData(data));
@@ -244,6 +266,7 @@ export class SerialService extends EventEmitter {
           this.isConnected = false;
           this.stopStatusPolling();
           this.protocolParser.reset();
+          this.resetTransducerLayoutState();
           this.emitStatus('disconnected');
           resolve();
         });
@@ -252,14 +275,13 @@ export class SerialService extends EventEmitter {
       this.isConnected = false;
       this.stopStatusPolling();
       this.protocolParser.reset();
+      this.resetTransducerLayoutState();
       this.emitStatus('disconnected');
     }
   }
 
   private emitStatus(status: string, error?: string) {
-    if (this.mainWindow) {
-      this.mainWindow.webContents.send(IPC_CHANNELS.SERIAL_STATUS, { status, error });
-    }
+    this.safeSend(IPC_CHANNELS.SERIAL_STATUS, { status, error });
   }
 
   sendCommand(cmdType: DeviceCommand, payload: Buffer = Buffer.alloc(0)) {
@@ -292,6 +314,9 @@ export class SerialService extends EventEmitter {
       case DeviceResponse.PING_ACK:
         this.handlePingAck(data);
         break;
+      case DeviceResponse.TRANSDUCER_INFO:
+        this.parseTransducerInfo(data);
+        break;
       case DeviceResponse.ACK:
       case DeviceResponse.NACK:
       case DeviceResponse.SACK:
@@ -315,9 +340,53 @@ export class SerialService extends EventEmitter {
     this.sendCommand(DeviceCommand.GET_STATUS);
   }
 
-  private handlePingAck(data: Buffer) {
-    if (!this.mainWindow) return;
+  private requestTransducerInfo(startIndex: number, count: number) {
+    if (!this.isConnected || count <= 0) {
+      return;
+    }
 
+    const payload = Buffer.from([startIndex & 0xff, count & 0xff]);
+    this.sendCommand(DeviceCommand.GET_TRANSDUCER_INFO, payload);
+  }
+
+  private resetTransducerLayoutState() {
+    this.expectedTransducerCount = 0;
+    this.transducerPositions = [];
+    this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+  }
+
+  private beginTransducerLayoutFetch(transducerCount: number) {
+    const roundedCount = Math.max(0, Math.min(255, Math.round(transducerCount)));
+    this.expectedTransducerCount = roundedCount;
+    this.transducerPositions = Array.from({ length: roundedCount }, () => undefined);
+
+    if (roundedCount === 0) {
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+      return;
+    }
+
+    this.requestTransducerInfo(0, Math.min(MAX_TRANSDUCER_INFO_BATCH, roundedCount));
+  }
+
+  private requestNextTransducerBatch() {
+    if (this.expectedTransducerCount === 0) {
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+      return;
+    }
+
+    const nextMissingIndex = this.transducerPositions.findIndex((item) => item === undefined);
+    if (nextMissingIndex < 0) {
+      const layout = this.transducerPositions.filter((item): item is TransducerPosition => item !== undefined);
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, layout);
+      return;
+    }
+
+    const remaining = this.expectedTransducerCount - nextMissingIndex;
+    const count = Math.min(MAX_TRANSDUCER_INFO_BATCH, remaining);
+    this.requestTransducerInfo(nextMissingIndex, count);
+  }
+
+  private handlePingAck(data: Buffer) {
     if (data.length < 1) {
       return;
     }
@@ -335,18 +404,16 @@ export class SerialService extends EventEmitter {
       receivedAt: now,
     };
 
-    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_PING_ACK, payload);
+    this.safeSend(IPC_CHANNELS.DEVICE_PING_ACK, payload);
   }
 
   private emitAck(type: number, data: Buffer) {
-    if (!this.mainWindow) return;
-
     const payload: DeviceAckPayload = {
       type: type as DeviceResponse,
       dataHex: data.length > 0 ? data.toString('hex') : undefined,
     };
 
-    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_ACK, payload);
+    this.safeSend(IPC_CHANNELS.DEVICE_ACK, payload);
   }
 
   private startStatusPolling() {
@@ -386,18 +453,54 @@ export class SerialService extends EventEmitter {
     offset += 4;
     const transducerSpace = data.readFloatLE(offset);
 
-    if (this.mainWindow) {
-        const config: DeviceConfig = {
-            serialNumber,
-            version,
-            arrayType,
-            arraySize,
-            transducerCount,
-            transducerSize,
-            transducerSpace
-        };
-        this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_CONFIG, config);
+    const config: DeviceConfig = {
+      serialNumber,
+      version,
+      arrayType,
+      arraySize,
+      transducerCount,
+      transducerSize,
+      transducerSpace,
+    };
+
+    this.safeSend(IPC_CHANNELS.DEVICE_CONFIG, config);
+    this.beginTransducerLayoutFetch(transducerCount);
+  }
+
+  private parseTransducerInfo(data: Buffer) {
+    if (data.length < 2 || this.expectedTransducerCount <= 0) {
+      return;
     }
+
+    const startIndex = data.readUInt8(0);
+    const count = data.readUInt8(1);
+    const expectedDataLength = 2 + count * 12;
+
+    if (data.length < expectedDataLength) {
+      return;
+    }
+
+    for (let i = 0; i < count; i += 1) {
+      const index = startIndex + i;
+      if (index >= this.expectedTransducerCount) {
+        continue;
+      }
+
+      const offset = 2 + i * 12;
+      this.transducerPositions[index] = {
+        x: data.readFloatLE(offset),
+        y: data.readFloatLE(offset + 4),
+        z: data.readFloatLE(offset + 8),
+      };
+    }
+
+    if (count === 0) {
+      const layout = this.transducerPositions.filter((item): item is TransducerPosition => item !== undefined);
+      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, layout);
+      return;
+    }
+
+    this.requestNextTransducerBatch();
   }
 
   private parseStatus(data: Buffer) {
@@ -423,11 +526,18 @@ export class SerialService extends EventEmitter {
     const calibrationMode = data.readUInt32LE(offset); offset += 4;
     const phaseSetMode = data.readUInt32LE(offset); offset += 4;
 
-    if (this.mainWindow) {
-      const status: DeviceStatus = {
-        vdda, v3v3, v5v0, temperature, dmaUpdateStats, loopFreq, stimulationType, calibrationMode, phaseSetMode
-      };
-      this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_STATUS, status);
-    }
+    const status: DeviceStatus = {
+      vdda,
+      v3v3,
+      v5v0,
+      temperature,
+      dmaUpdateStats,
+      loopFreq,
+      stimulationType,
+      calibrationMode,
+      phaseSetMode,
+    };
+
+    this.safeSend(IPC_CHANNELS.DEVICE_STATUS, status);
   }
 }
