@@ -1,7 +1,9 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { SerialService } from './services/SerialService'
+import { IPC_CHANNELS, DeviceCommand } from '../src/shared/types'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -25,14 +27,20 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 let win: BrowserWindow | null
+const serialService = new SerialService()
 
 function createWindow() {
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    width: 1200,
+    height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
+      sandbox: false, // Ensure Node integration if needed, though contextBridge is safer
     },
   })
+
+  serialService.setMainWindow(win)
 
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {
@@ -46,6 +54,34 @@ function createWindow() {
     win.loadFile(path.join(RENDERER_DIST, 'index.html'))
   }
 }
+
+// IPC Handlers
+ipcMain.handle(IPC_CHANNELS.SERIAL_LIST, async () => {
+  return await serialService.listPorts()
+})
+
+ipcMain.handle(IPC_CHANNELS.SERIAL_CONNECT, async (_event, path, baudRate) => {
+  try {
+    await serialService.connect(path, baudRate)
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle(IPC_CHANNELS.SERIAL_DISCONNECT, async () => {
+  await serialService.disconnect()
+  return { success: true }
+})
+
+ipcMain.on(IPC_CHANNELS.DEVICE_COMMAND, (_event, cmdType, payload) => {
+  if (payload) {
+    const buffer = Buffer.from(payload)
+    serialService.sendCommand(cmdType, buffer)
+  } else {
+    serialService.sendCommand(cmdType)
+  }
+})
 
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
