@@ -410,7 +410,13 @@ export class SerialService extends EventEmitter {
     const v3v3 = data.readFloatLE(offset); offset += 4;
     const v5v0 = data.readFloatLE(offset); offset += 4;
     const temperature = data.readFloatLE(offset); offset += 4;
-    const dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+    let dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+    
+    // Firmware calculates time in ms, convert to seconds for display
+    if (hasDoubleDmaField) {
+      dmaUpdateStats /= 1000.0;
+    }
+
     offset += hasDoubleDmaField ? 8 : 4;
     const loopFreq = data.readFloatLE(offset); offset += 4;
     const stimulationType = data.readUInt8(offset); offset += 1;

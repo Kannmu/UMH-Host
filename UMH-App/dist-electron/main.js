@@ -377,7 +377,10 @@ class SerialService extends EventEmitter {
     offset += 4;
     const temperature = data.readFloatLE(offset);
     offset += 4;
-    const dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+    let dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+    if (hasDoubleDmaField) {
+      dmaUpdateStats /= 1e3;
+    }
     offset += hasDoubleDmaField ? 8 : 4;
     const loopFreq = data.readFloatLE(offset);
     offset += 4;
