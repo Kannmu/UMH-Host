@@ -6,6 +6,16 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { SerialPort } from "serialport";
 import { EventEmitter } from "events";
+var DeviceCommand = /* @__PURE__ */ ((DeviceCommand2) => {
+  DeviceCommand2[DeviceCommand2["ENABLE_DISABLE"] = 1] = "ENABLE_DISABLE";
+  DeviceCommand2[DeviceCommand2["PING"] = 2] = "PING";
+  DeviceCommand2[DeviceCommand2["GET_CONFIG"] = 3] = "GET_CONFIG";
+  DeviceCommand2[DeviceCommand2["GET_STATUS"] = 4] = "GET_STATUS";
+  DeviceCommand2[DeviceCommand2["SET_STIMULATION"] = 5] = "SET_STIMULATION";
+  DeviceCommand2[DeviceCommand2["SET_PHASES"] = 6] = "SET_PHASES";
+  DeviceCommand2[DeviceCommand2["SET_DEMO"] = 7] = "SET_DEMO";
+  return DeviceCommand2;
+})(DeviceCommand || {});
 var DeviceResponse = /* @__PURE__ */ ((DeviceResponse2) => {
   DeviceResponse2[DeviceResponse2["ACK"] = 128] = "ACK";
   DeviceResponse2[DeviceResponse2["NACK"] = 129] = "NACK";
@@ -26,24 +36,115 @@ const IPC_CHANNELS = {
   DEVICE_COMMAND: "device:command",
   DEVICE_STATUS: "device:status",
   // Event
-  DEVICE_CONFIG: "device:config"
+  DEVICE_CONFIG: "device:config",
+  // Event
+  DEVICE_PING_ACK: "device:ping-ack",
+  // Event
+  DEVICE_ACK: "device:ack"
   // Event
 };
 const HEADER_BYTE_1 = 170;
 const HEADER_BYTE_2 = 85;
 const TAIL_BYTE_1 = 13;
 const TAIL_BYTE_2 = 10;
+const FRAME_MIN_LENGTH = 7;
+class ProtocolParser {
+  constructor() {
+    __publicField(this, "buffer", Buffer.alloc(0));
+  }
+  push(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    const frames = [];
+    while (this.buffer.length >= FRAME_MIN_LENGTH) {
+      const headerIndex = this.findHeader();
+      if (headerIndex < 0) {
+        if (this.buffer.length > 4096) {
+          this.buffer = Buffer.alloc(0);
+        }
+        break;
+      }
+      if (headerIndex > 0) {
+        this.buffer = this.buffer.subarray(headerIndex);
+      }
+      if (this.buffer.length < 4) {
+        break;
+      }
+      const dataLen = this.buffer[3];
+      const frameLen = 2 + 1 + 1 + dataLen + 1 + 2;
+      if (this.buffer.length < frameLen) {
+        break;
+      }
+      const frame = this.buffer.subarray(0, frameLen);
+      if (!this.isTailValid(frame, dataLen) || !this.isChecksumValid(frame, dataLen)) {
+        this.buffer = this.buffer.subarray(1);
+        continue;
+      }
+      frames.push({
+        cmdType: frame[2],
+        data: frame.subarray(4, 4 + dataLen)
+      });
+      this.buffer = this.buffer.subarray(frameLen);
+    }
+    return frames;
+  }
+  reset() {
+    this.buffer = Buffer.alloc(0);
+  }
+  static buildFrame(cmdType, payload = Buffer.alloc(0)) {
+    const length = payload.length;
+    const frame = Buffer.alloc(2 + 1 + 1 + length + 1 + 2);
+    let offset = 0;
+    frame.writeUInt8(HEADER_BYTE_1, offset++);
+    frame.writeUInt8(HEADER_BYTE_2, offset++);
+    frame.writeUInt8(cmdType, offset++);
+    frame.writeUInt8(length, offset++);
+    if (length > 0) {
+      payload.copy(frame, offset);
+      offset += length;
+    }
+    let sum = cmdType + length;
+    for (const byte of payload) {
+      sum += byte;
+    }
+    frame.writeUInt8(sum & 255, offset++);
+    frame.writeUInt8(TAIL_BYTE_1, offset++);
+    frame.writeUInt8(TAIL_BYTE_2, offset);
+    return frame;
+  }
+  findHeader() {
+    for (let i = 0; i < this.buffer.length - 1; i++) {
+      if (this.buffer[i] === HEADER_BYTE_1 && this.buffer[i + 1] === HEADER_BYTE_2) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  isTailValid(frame, dataLen) {
+    return frame[4 + dataLen + 1] === TAIL_BYTE_1 && frame[4 + dataLen + 2] === TAIL_BYTE_2;
+  }
+  isChecksumValid(frame, dataLen) {
+    const cmdType = frame[2];
+    const expectedChecksum = frame[4 + dataLen];
+    let sum = cmdType + dataLen;
+    for (let i = 0; i < dataLen; i++) {
+      sum += frame[4 + i];
+    }
+    return (sum & 255) === expectedChecksum;
+  }
+}
 class SerialService extends EventEmitter {
   constructor() {
     super();
     __publicField(this, "port", null);
-    __publicField(this, "buffer", Buffer.alloc(0));
     __publicField(this, "mainWindow", null);
     __publicField(this, "isConnected", false);
     __publicField(this, "shouldReconnect", false);
     __publicField(this, "lastPath", "");
     __publicField(this, "lastBaudRate", 115200);
     __publicField(this, "reconnectTimeout", null);
+    __publicField(this, "statusPollTimer", null);
+    __publicField(this, "protocolParser", new ProtocolParser());
+    __publicField(this, "pendingPingTimestamps", /* @__PURE__ */ new Map());
   }
   setMainWindow(window) {
     this.mainWindow = window;
@@ -75,11 +176,13 @@ class SerialService extends EventEmitter {
         } else {
           console.log("Port opened:", path2);
           this.isConnected = true;
+          this.protocolParser.reset();
           this.emitStatus("connected");
           (_a = this.port) == null ? void 0 : _a.on("data", (data) => this.handleData(data));
           (_b = this.port) == null ? void 0 : _b.on("close", () => {
             console.log("Port closed");
             this.isConnected = false;
+            this.stopStatusPolling();
             this.emitStatus("disconnected");
             if (this.shouldReconnect) {
               this.scheduleReconnect();
@@ -88,11 +191,15 @@ class SerialService extends EventEmitter {
           (_c = this.port) == null ? void 0 : _c.on("error", (err2) => {
             console.error("Port error:", err2);
             this.isConnected = false;
+            this.stopStatusPolling();
             this.emitStatus("error", err2.message);
             if (this.shouldReconnect) {
               this.scheduleReconnect();
             }
           });
+          this.startStatusPolling();
+          this.requestConfig();
+          this.sendPing();
           resolve();
         }
       });
@@ -124,12 +231,16 @@ class SerialService extends EventEmitter {
         (_a = this.port) == null ? void 0 : _a.close(() => {
           this.port = null;
           this.isConnected = false;
+          this.stopStatusPolling();
+          this.protocolParser.reset();
           this.emitStatus("disconnected");
           resolve();
         });
       });
     } else {
       this.isConnected = false;
+      this.stopStatusPolling();
+      this.protocolParser.reset();
       this.emitStatus("disconnected");
     }
   }
@@ -140,62 +251,21 @@ class SerialService extends EventEmitter {
   }
   sendCommand(cmdType, payload = Buffer.alloc(0)) {
     if (!this.port || !this.port.isOpen) return;
-    const length = payload.length;
-    const frame = Buffer.alloc(2 + 1 + 1 + length + 1 + 2);
-    let offset = 0;
-    frame.writeUInt8(HEADER_BYTE_1, offset++);
-    frame.writeUInt8(HEADER_BYTE_2, offset++);
-    frame.writeUInt8(cmdType, offset++);
-    frame.writeUInt8(length, offset++);
-    if (length > 0) {
-      payload.copy(frame, offset);
-      offset += length;
-    }
-    let sum = cmdType + length;
-    for (const byte of payload) {
-      sum += byte;
-    }
-    const checksum = sum & 255;
-    frame.writeUInt8(checksum, offset++);
-    frame.writeUInt8(TAIL_BYTE_1, offset++);
-    frame.writeUInt8(TAIL_BYTE_2, offset++);
+    const frame = ProtocolParser.buildFrame(cmdType, payload);
     this.port.write(frame);
   }
+  sendPingWithEchoedByte(echoedByte) {
+    const pingByte = echoedByte & 255;
+    this.pendingPingTimestamps.set(pingByte, Date.now());
+    this.sendCommand(DeviceCommand.PING, Buffer.from([pingByte]));
+  }
   handleData(data) {
-    this.buffer = Buffer.concat([this.buffer, data]);
-    while (this.buffer.length >= 7) {
-      const headerIndex = this.buffer.indexOf(Buffer.from([HEADER_BYTE_1, HEADER_BYTE_2]));
-      if (headerIndex === -1) {
-        if (this.buffer.length > 4096) this.buffer = Buffer.alloc(0);
-        break;
-      }
-      if (headerIndex > 0) {
-        this.buffer = this.buffer.subarray(headerIndex);
-      }
-      if (this.buffer.length < 4) break;
-      const dataLen = this.buffer[3];
-      const frameLen = 2 + 1 + 1 + dataLen + 1 + 2;
-      if (this.buffer.length < frameLen) break;
-      const frame = this.buffer.subarray(0, frameLen);
-      this.processFrame(frame);
-      this.buffer = this.buffer.subarray(frameLen);
+    const frames = this.protocolParser.push(data);
+    for (const frame of frames) {
+      this.processFrame(frame.cmdType, frame.data);
     }
   }
-  processFrame(frame) {
-    const cmdType = frame[2];
-    const dataLen = frame[3];
-    const data = frame.subarray(4, 4 + dataLen);
-    const checksum = frame[4 + dataLen];
-    const tail = frame.subarray(4 + dataLen + 1, 4 + dataLen + 3);
-    if (tail[0] !== TAIL_BYTE_1 || tail[1] !== TAIL_BYTE_2) return;
-    let sum = cmdType + dataLen;
-    for (const byte of data) {
-      sum += byte;
-    }
-    if ((sum & 255) !== checksum) {
-      console.warn("Checksum mismatch");
-      return;
-    }
+  processFrame(cmdType, data) {
     switch (cmdType) {
       case DeviceResponse.RETURN_CONFIG:
         this.parseConfig(data);
@@ -204,7 +274,66 @@ class SerialService extends EventEmitter {
         this.parseStatus(data);
         break;
       case DeviceResponse.PING_ACK:
+        this.handlePingAck(data);
         break;
+      case DeviceResponse.ACK:
+      case DeviceResponse.NACK:
+      case DeviceResponse.SACK:
+      case DeviceResponse.DEMO_ACK:
+      case DeviceResponse.ERROR:
+        this.emitAck(cmdType, data);
+        break;
+    }
+  }
+  sendPing() {
+    const echoedByte = Math.floor(Math.random() * 256);
+    this.sendPingWithEchoedByte(echoedByte);
+  }
+  requestConfig() {
+    this.sendCommand(DeviceCommand.GET_CONFIG);
+  }
+  requestStatus() {
+    this.sendCommand(DeviceCommand.GET_STATUS);
+  }
+  handlePingAck(data) {
+    if (!this.mainWindow) return;
+    if (data.length < 1) {
+      return;
+    }
+    const echoedByte = data[0];
+    const sentAt = this.pendingPingTimestamps.get(echoedByte);
+    if (sentAt !== void 0) {
+      this.pendingPingTimestamps.delete(echoedByte);
+    }
+    const now = Date.now();
+    const payload = {
+      echoedByte,
+      rttMs: sentAt !== void 0 ? now - sentAt : -1,
+      receivedAt: now
+    };
+    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_PING_ACK, payload);
+  }
+  emitAck(type, data) {
+    if (!this.mainWindow) return;
+    const payload = {
+      type,
+      dataHex: data.length > 0 ? data.toString("hex") : void 0
+    };
+    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_ACK, payload);
+  }
+  startStatusPolling() {
+    this.stopStatusPolling();
+    this.statusPollTimer = setInterval(() => {
+      if (!this.isConnected) {
+        return;
+      }
+      this.requestStatus();
+    }, 200);
+  }
+  stopStatusPolling() {
+    if (this.statusPollTimer) {
+      clearInterval(this.statusPollTimer);
+      this.statusPollTimer = null;
     }
   }
   parseConfig(data) {
@@ -237,7 +366,8 @@ class SerialService extends EventEmitter {
     }
   }
   parseStatus(data) {
-    if (data.length < 37) return;
+    if (data.length < 33) return;
+    const hasDoubleDmaField = data.length >= 37;
     let offset = 0;
     const vdda = data.readFloatLE(offset);
     offset += 4;
@@ -247,8 +377,8 @@ class SerialService extends EventEmitter {
     offset += 4;
     const temperature = data.readFloatLE(offset);
     offset += 4;
-    const dmaUpdateStats = data.readDoubleLE(offset);
-    offset += 8;
+    const dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+    offset += hasDoubleDmaField ? 8 : 4;
     const loopFreq = data.readFloatLE(offset);
     offset += 4;
     const stimulationType = data.readUInt8(offset);
@@ -321,6 +451,10 @@ ipcMain.handle(IPC_CHANNELS.SERIAL_DISCONNECT, async () => {
 ipcMain.on(IPC_CHANNELS.DEVICE_COMMAND, (_event, cmdType, payload) => {
   if (payload) {
     const buffer = Buffer.from(payload);
+    if (cmdType === DeviceCommand.PING && buffer.length >= 1) {
+      serialService.sendPingWithEchoedByte(buffer[0]);
+      return;
+    }
     serialService.sendCommand(cmdType, buffer);
   } else {
     serialService.sendCommand(cmdType);

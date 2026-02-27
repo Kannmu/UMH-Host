@@ -31,9 +31,21 @@ export enum DeviceResponse {
 // Stimulation types
 export enum StimulationType {
   POINT = 0,
-  LINEAR = 1,
-  CIRCULAR = 2,
-  TWIN_TRAP = 3,
+  DISCRETE = 1,
+  LINEAR = 2,
+  CIRCULAR = 3,
+  TWIN_TRAP = 4,
+}
+
+export interface PingAckPayload {
+  echoedByte: number;
+  rttMs: number;
+  receivedAt: number;
+}
+
+export interface DeviceAckPayload {
+  type: DeviceResponse;
+  dataHex?: string;
 }
 
 export interface DeviceConfig {
@@ -74,6 +86,8 @@ export const IPC_CHANNELS = {
   DEVICE_COMMAND: 'device:command',
   DEVICE_STATUS: 'device:status', // Event
   DEVICE_CONFIG: 'device:config', // Event
+  DEVICE_PING_ACK: 'device:ping-ack', // Event
+  DEVICE_ACK: 'device:ack', // Event
 };
 
 export interface SerialPortInfo {

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { SerialService } from './services/SerialService'
-import { IPC_CHANNELS } from '../src/shared/types'
+import { DeviceCommand, IPC_CHANNELS } from '../src/shared/types'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -76,6 +76,10 @@ ipcMain.handle(IPC_CHANNELS.SERIAL_DISCONNECT, async () => {
 ipcMain.on(IPC_CHANNELS.DEVICE_COMMAND, (_event, cmdType, payload) => {
   if (payload) {
     const buffer = Buffer.from(payload)
+    if (cmdType === DeviceCommand.PING && buffer.length >= 1) {
+      serialService.sendPingWithEchoedByte(buffer[0])
+      return
+    }
     serialService.sendCommand(cmdType, buffer)
   } else {
     serialService.sendCommand(cmdType)

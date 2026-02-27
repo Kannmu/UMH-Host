@@ -66,6 +66,12 @@
   }
 }
 
+@layer components {
+  .input {
+    @apply px-2 py-1.5 rounded-md border border-border bg-transparent text-sm outline-none focus:ring-1 focus:ring-ring;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;

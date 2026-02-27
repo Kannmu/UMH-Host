@@ -6,23 +6,140 @@ import {
   DeviceResponse, 
   IPC_CHANNELS, 
   DeviceConfig, 
-  DeviceStatus 
+  DeviceStatus,
+  DeviceAckPayload,
+  PingAckPayload,
 } from '../../src/shared/types';
 
 const HEADER_BYTE_1 = 0xAA;
 const HEADER_BYTE_2 = 0x55;
 const TAIL_BYTE_1 = 0x0D;
 const TAIL_BYTE_2 = 0x0A;
+const FRAME_MIN_LENGTH = 7;
+
+interface ParsedFrame {
+  cmdType: number;
+  data: Buffer;
+}
+
+class ProtocolParser {
+  private buffer: Buffer = Buffer.alloc(0);
+
+  push(chunk: Buffer): ParsedFrame[] {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    const frames: ParsedFrame[] = [];
+
+    while (this.buffer.length >= FRAME_MIN_LENGTH) {
+      const headerIndex = this.findHeader();
+
+      if (headerIndex < 0) {
+        if (this.buffer.length > 4096) {
+          this.buffer = Buffer.alloc(0);
+        }
+        break;
+      }
+
+      if (headerIndex > 0) {
+        this.buffer = this.buffer.subarray(headerIndex);
+      }
+
+      if (this.buffer.length < 4) {
+        break;
+      }
+
+      const dataLen = this.buffer[3];
+      const frameLen = 2 + 1 + 1 + dataLen + 1 + 2;
+
+      if (this.buffer.length < frameLen) {
+        break;
+      }
+
+      const frame = this.buffer.subarray(0, frameLen);
+      if (!this.isTailValid(frame, dataLen) || !this.isChecksumValid(frame, dataLen)) {
+        this.buffer = this.buffer.subarray(1);
+        continue;
+      }
+
+      frames.push({
+        cmdType: frame[2],
+        data: frame.subarray(4, 4 + dataLen),
+      });
+
+      this.buffer = this.buffer.subarray(frameLen);
+    }
+
+    return frames;
+  }
+
+  reset() {
+    this.buffer = Buffer.alloc(0);
+  }
+
+  static buildFrame(cmdType: number, payload: Buffer = Buffer.alloc(0)): Buffer {
+    const length = payload.length;
+    const frame = Buffer.alloc(2 + 1 + 1 + length + 1 + 2);
+
+    let offset = 0;
+    frame.writeUInt8(HEADER_BYTE_1, offset++);
+    frame.writeUInt8(HEADER_BYTE_2, offset++);
+    frame.writeUInt8(cmdType, offset++);
+    frame.writeUInt8(length, offset++);
+
+    if (length > 0) {
+      payload.copy(frame, offset);
+      offset += length;
+    }
+
+    let sum = cmdType + length;
+    for (const byte of payload) {
+      sum += byte;
+    }
+
+    frame.writeUInt8(sum & 0xFF, offset++);
+    frame.writeUInt8(TAIL_BYTE_1, offset++);
+    frame.writeUInt8(TAIL_BYTE_2, offset);
+
+    return frame;
+  }
+
+  private findHeader(): number {
+    for (let i = 0; i < this.buffer.length - 1; i++) {
+      if (this.buffer[i] === HEADER_BYTE_1 && this.buffer[i + 1] === HEADER_BYTE_2) {
+        return i;
+      }
+    }
+
+    return -1;
+  }
+
+  private isTailValid(frame: Buffer, dataLen: number): boolean {
+    return frame[4 + dataLen + 1] === TAIL_BYTE_1 && frame[4 + dataLen + 2] === TAIL_BYTE_2;
+  }
+
+  private isChecksumValid(frame: Buffer, dataLen: number): boolean {
+    const cmdType = frame[2];
+    const expectedChecksum = frame[4 + dataLen];
+    let sum = cmdType + dataLen;
+
+    for (let i = 0; i < dataLen; i++) {
+      sum += frame[4 + i];
+    }
+
+    return (sum & 0xFF) === expectedChecksum;
+  }
+}
 
 export class SerialService extends EventEmitter {
   private port: SerialPort | null = null;
-  private buffer: Buffer = Buffer.alloc(0);
   private mainWindow: BrowserWindow | null = null;
   private isConnected: boolean = false;
   private shouldReconnect: boolean = false;
   private lastPath: string = '';
   private lastBaudRate: number = 115200;
   private reconnectTimeout: NodeJS.Timeout | null = null;
+  private statusPollTimer: NodeJS.Timeout | null = null;
+  private protocolParser = new ProtocolParser();
+  private pendingPingTimestamps = new Map<number, number>();
 
   constructor() {
     super();
@@ -60,21 +177,18 @@ export class SerialService extends EventEmitter {
           console.error('Error opening port:', err);
           this.emitStatus('error', err.message);
           this.isConnected = false;
-          // Attempt reconnect if initial connection fails? 
-          // Usually we reject here, but for auto-reconnect logic we might want to retry.
-          // For now, let's respect the promise rejection for the UI feedback, 
-          // but if it was an "auto" reconnect attempt, we should keep trying.
           reject(err);
         } else {
           console.log('Port opened:', path);
           this.isConnected = true;
+          this.protocolParser.reset();
           this.emitStatus('connected');
-          
-          // Setup listeners
+
           this.port?.on('data', (data) => this.handleData(data));
           this.port?.on('close', () => {
             console.log('Port closed');
             this.isConnected = false;
+            this.stopStatusPolling();
             this.emitStatus('disconnected');
             if (this.shouldReconnect) {
               this.scheduleReconnect();
@@ -83,11 +197,16 @@ export class SerialService extends EventEmitter {
           this.port?.on('error', (err) => {
             console.error('Port error:', err);
             this.isConnected = false;
+            this.stopStatusPolling();
             this.emitStatus('error', err.message);
             if (this.shouldReconnect) {
               this.scheduleReconnect();
             }
           });
+
+          this.startStatusPolling();
+          this.requestConfig();
+          this.sendPing();
           
           resolve();
         }
@@ -123,13 +242,17 @@ export class SerialService extends EventEmitter {
         this.port?.close(() => {
           this.port = null;
           this.isConnected = false;
+          this.stopStatusPolling();
+          this.protocolParser.reset();
           this.emitStatus('disconnected');
           resolve();
         });
       });
     } else {
-        this.isConnected = false;
-        this.emitStatus('disconnected');
+      this.isConnected = false;
+      this.stopStatusPolling();
+      this.protocolParser.reset();
+      this.emitStatus('disconnected');
     }
   }
 
@@ -141,85 +264,24 @@ export class SerialService extends EventEmitter {
 
   sendCommand(cmdType: DeviceCommand, payload: Buffer = Buffer.alloc(0)) {
     if (!this.port || !this.port.isOpen) return;
-
-    const length = payload.length;
-    // Frame: Header(2) + Cmd(1) + Len(1) + Payload(N) + Checksum(1) + Tail(2)
-    const frame = Buffer.alloc(2 + 1 + 1 + length + 1 + 2);
-    
-    let offset = 0;
-    frame.writeUInt8(HEADER_BYTE_1, offset++);
-    frame.writeUInt8(HEADER_BYTE_2, offset++);
-    frame.writeUInt8(cmdType, offset++);
-    frame.writeUInt8(length, offset++);
-    
-    if (length > 0) {
-      payload.copy(frame, offset);
-      offset += length;
-    }
-
-    // Checksum: (Cmd + Len + Sum(Data)) & 0xFF
-    let sum = cmdType + length;
-    for (const byte of payload) {
-      sum += byte;
-    }
-    const checksum = sum & 0xFF;
-    frame.writeUInt8(checksum, offset++);
-
-    frame.writeUInt8(TAIL_BYTE_1, offset++);
-    frame.writeUInt8(TAIL_BYTE_2, offset++);
-
+    const frame = ProtocolParser.buildFrame(cmdType, payload);
     this.port.write(frame);
   }
 
+  sendPingWithEchoedByte(echoedByte: number) {
+    const pingByte = echoedByte & 0xff;
+    this.pendingPingTimestamps.set(pingByte, Date.now());
+    this.sendCommand(DeviceCommand.PING, Buffer.from([pingByte]));
+  }
+
   private handleData(data: Buffer) {
-    this.buffer = Buffer.concat([this.buffer, data]);
-
-    // Simple parser loop
-    while (this.buffer.length >= 7) { 
-      const headerIndex = this.buffer.indexOf(Buffer.from([HEADER_BYTE_1, HEADER_BYTE_2]));
-      
-      if (headerIndex === -1) {
-        // Discard all but keep enough bytes that might match header start
-        if (this.buffer.length > 4096) this.buffer = Buffer.alloc(0);
-        break;
-      }
-
-      if (headerIndex > 0) {
-        this.buffer = this.buffer.subarray(headerIndex);
-      }
-
-      if (this.buffer.length < 4) break;
-
-      const dataLen = this.buffer[3];
-      const frameLen = 2 + 1 + 1 + dataLen + 1 + 2;
-
-      if (this.buffer.length < frameLen) break;
-
-      const frame = this.buffer.subarray(0, frameLen);
-      this.processFrame(frame);
-
-      this.buffer = this.buffer.subarray(frameLen);
+    const frames = this.protocolParser.push(data);
+    for (const frame of frames) {
+      this.processFrame(frame.cmdType, frame.data);
     }
   }
 
-  private processFrame(frame: Buffer) {
-    const cmdType = frame[2];
-    const dataLen = frame[3];
-    const data = frame.subarray(4, 4 + dataLen);
-    const checksum = frame[4 + dataLen];
-    const tail = frame.subarray(4 + dataLen + 1, 4 + dataLen + 3);
-
-    if (tail[0] !== TAIL_BYTE_1 || tail[1] !== TAIL_BYTE_2) return;
-
-    let sum = cmdType + dataLen;
-    for (const byte of data) {
-      sum += byte;
-    }
-    if ((sum & 0xFF) !== checksum) {
-      console.warn('Checksum mismatch');
-      return;
-    }
-
+  private processFrame(cmdType: number, data: Buffer) {
     switch (cmdType) {
       case DeviceResponse.RETURN_CONFIG:
         this.parseConfig(data);
@@ -228,13 +290,85 @@ export class SerialService extends EventEmitter {
         this.parseStatus(data);
         break;
       case DeviceResponse.PING_ACK:
-        // Handle pong
+        this.handlePingAck(data);
+        break;
+      case DeviceResponse.ACK:
+      case DeviceResponse.NACK:
+      case DeviceResponse.SACK:
+      case DeviceResponse.DEMO_ACK:
+      case DeviceResponse.ERROR:
+        this.emitAck(cmdType, data);
         break;
     }
   }
 
+  private sendPing() {
+    const echoedByte = Math.floor(Math.random() * 256);
+    this.sendPingWithEchoedByte(echoedByte);
+  }
+
+  private requestConfig() {
+    this.sendCommand(DeviceCommand.GET_CONFIG);
+  }
+
+  private requestStatus() {
+    this.sendCommand(DeviceCommand.GET_STATUS);
+  }
+
+  private handlePingAck(data: Buffer) {
+    if (!this.mainWindow) return;
+
+    if (data.length < 1) {
+      return;
+    }
+
+    const echoedByte = data[0];
+    const sentAt = this.pendingPingTimestamps.get(echoedByte);
+    if (sentAt !== undefined) {
+      this.pendingPingTimestamps.delete(echoedByte);
+    }
+
+    const now = Date.now();
+    const payload: PingAckPayload = {
+      echoedByte,
+      rttMs: sentAt !== undefined ? now - sentAt : -1,
+      receivedAt: now,
+    };
+
+    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_PING_ACK, payload);
+  }
+
+  private emitAck(type: number, data: Buffer) {
+    if (!this.mainWindow) return;
+
+    const payload: DeviceAckPayload = {
+      type: type as DeviceResponse,
+      dataHex: data.length > 0 ? data.toString('hex') : undefined,
+    };
+
+    this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_ACK, payload);
+  }
+
+  private startStatusPolling() {
+    this.stopStatusPolling();
+
+    this.statusPollTimer = setInterval(() => {
+      if (!this.isConnected) {
+        return;
+      }
+
+      this.requestStatus();
+    }, 200);
+  }
+
+  private stopStatusPolling() {
+    if (this.statusPollTimer) {
+      clearInterval(this.statusPollTimer);
+      this.statusPollTimer = null;
+    }
+  }
+
   private parseConfig(data: Buffer) {
-    // char serial_number[12]; uint32_t version; uint8_t array_type; uint32_t array_size; uint32_t num_transducer; float transducer_size; float transducer_space;
     if (data.length < 33) return;
 
     let offset = 0;
@@ -267,25 +401,27 @@ export class SerialService extends EventEmitter {
   }
 
   private parseStatus(data: Buffer) {
-      // float vdda, v33, v50, temp; double dma; float freq; uint8 stim; uint32 cal; uint32 phase;
-      if (data.length < 37) return;
+    if (data.length < 33) return;
 
-      let offset = 0;
-      const vdda = data.readFloatLE(offset); offset += 4;
-      const v3v3 = data.readFloatLE(offset); offset += 4;
-      const v5v0 = data.readFloatLE(offset); offset += 4;
-      const temperature = data.readFloatLE(offset); offset += 4;
-      const dmaUpdateStats = data.readDoubleLE(offset); offset += 8;
-      const loopFreq = data.readFloatLE(offset); offset += 4;
-      const stimulationType = data.readUInt8(offset); offset += 1;
-      const calibrationMode = data.readUInt32LE(offset); offset += 4;
-      const phaseSetMode = data.readUInt32LE(offset); offset += 4;
+    const hasDoubleDmaField = data.length >= 37;
 
-      if (this.mainWindow) {
-          const status: DeviceStatus = {
-              vdda, v3v3, v5v0, temperature, dmaUpdateStats, loopFreq, stimulationType, calibrationMode, phaseSetMode
-          };
-          this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_STATUS, status);
-      }
+    let offset = 0;
+    const vdda = data.readFloatLE(offset); offset += 4;
+    const v3v3 = data.readFloatLE(offset); offset += 4;
+    const v5v0 = data.readFloatLE(offset); offset += 4;
+    const temperature = data.readFloatLE(offset); offset += 4;
+    const dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
+    offset += hasDoubleDmaField ? 8 : 4;
+    const loopFreq = data.readFloatLE(offset); offset += 4;
+    const stimulationType = data.readUInt8(offset); offset += 1;
+    const calibrationMode = data.readUInt32LE(offset); offset += 4;
+    const phaseSetMode = data.readUInt32LE(offset); offset += 4;
+
+    if (this.mainWindow) {
+      const status: DeviceStatus = {
+        vdda, v3v3, v5v0, temperature, dmaUpdateStats, loopFreq, stimulationType, calibrationMode, phaseSetMode
+      };
+      this.mainWindow.webContents.send(IPC_CHANNELS.DEVICE_STATUS, status);
+    }
   }
 }
