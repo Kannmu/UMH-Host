@@ -7,7 +7,7 @@ import { Activity } from 'lucide-react';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const { connectionStatus, status } = useDeviceStore();
+  const { status } = useDeviceStore();
 
   useEffect(() => {
     initDeviceListeners();

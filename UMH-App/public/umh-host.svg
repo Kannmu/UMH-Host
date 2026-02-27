@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+  <defs>
+    <!-- 超声波束渐变色：从底部不可见逐渐汇聚成高能状态 -->
+    <linearGradient id="waveGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00F2FE" stop-opacity="0.1"/>
+      <stop offset="60%" stop-color="#00F2FE" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#4FACFE" stop-opacity="1"/>
+    </linearGradient>
+    <!-- 触觉焦点的发光滤镜 -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+  <!-- 桌面软件标准的圆角矩形背景 -->
+  <rect width="256" height="256" rx="56" fill="#0D111A" />
+  <!-- 外围环境：换能器六边形阵列拓扑的抽象边界 -->
+  <polygon points="128,32 212,80 212,176 128,224 44,176 44,80" fill="none" stroke="#1E293B" stroke-width="2" />
+  <!-- 换能器阵列 (Transducer Array) -->
+  <g fill="#334155">
+    <circle cx="68" cy="180" r="4" />
+    <circle cx="98" cy="180" r="4" />
+    <circle cx="128" cy="180" r="5" fill="#4FACFE" /> <!-- 中心基准换能器 -->
+    <circle cx="158" cy="180" r="4" />
+    <circle cx="188" cy="180" r="4" />
+  </g>
+  <!-- 相位控制波束 (Phased Array Waves) -->
+  <!-- 曲线方程模拟波在不同初始相位下向同一个空间点干涉聚焦的过程 -->
+  <g fill="none" stroke="url(#waveGrad)" stroke-width="3" stroke-linecap="round">
+    <path d="M 68 170 C 68 120 106 86 116 76" />
+    <path d="M 98 170 C 98 130 116 94 122 78" />
+    <path d="M 128 170 L 128 84" />
+    <path d="M 158 170 C 158 130 140 94 134 78" />
+    <path d="M 188 170 C 188 120 150 86 140 76" />
+  </g>
+  <!-- 触觉焦点 / 辐射声压中心 (Focal Point) -->
+  <circle cx="128" cy="68" r="10" fill="#00F2FE" filter="url(#glow)" />
+  <circle cx="128" cy="68" r="4" fill="#FFFFFF" />
+</svg>

@@ -9,7 +9,10 @@ export const SerialConnect: React.FC = () => {
   const { connectionStatus } = useDeviceStore();
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [selectedPort, setSelectedPort] = useState<string>('');
+  const [baudRate, setBaudRate] = useState<number>(115200);
   const [loading, setLoading] = useState(false);
+
+  const baudRates = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 
   const refreshPorts = async () => {
     setLoading(true);
@@ -28,12 +31,13 @@ export const SerialConnect: React.FC = () => {
 
   useEffect(() => {
     refreshPorts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleConnect = async () => {
     if (!selectedPort) return;
     try {
-      await deviceService.connect(selectedPort);
+      await deviceService.connect(selectedPort, baudRate);
     } catch (err) {
       console.error(err);
     }
@@ -62,6 +66,23 @@ export const SerialConnect: React.FC = () => {
           </option>
         ))}
       </select>
+
+      <div className="h-4 w-px bg-border mx-1" />
+
+      <select
+        className="bg-transparent border-none text-sm focus:ring-0 outline-none w-[90px]"
+        value={baudRate}
+        onChange={(e) => setBaudRate(Number(e.target.value))}
+        disabled={connectionStatus === 'connected'}
+      >
+        {baudRates.map((rate) => (
+          <option key={rate} value={rate}>
+            {rate}
+          </option>
+        ))}
+      </select>
+
+      <div className="h-4 w-px bg-border mx-1" />
 
       <button 
         onClick={refreshPorts} 

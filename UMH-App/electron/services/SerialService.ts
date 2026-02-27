@@ -19,6 +19,10 @@ export class SerialService extends EventEmitter {
   private buffer: Buffer = Buffer.alloc(0);
   private mainWindow: BrowserWindow | null = null;
   private isConnected: boolean = false;
+  private shouldReconnect: boolean = false;
+  private lastPath: string = '';
+  private lastBaudRate: number = 115200;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
@@ -37,6 +41,15 @@ export class SerialService extends EventEmitter {
       await this.disconnect();
     }
 
+    this.shouldReconnect = true;
+    this.lastPath = path;
+    this.lastBaudRate = baudRate;
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     this.emitStatus('connecting');
 
     return new Promise<void>((resolve, reject) => {
@@ -47,6 +60,10 @@ export class SerialService extends EventEmitter {
           console.error('Error opening port:', err);
           this.emitStatus('error', err.message);
           this.isConnected = false;
+          // Attempt reconnect if initial connection fails? 
+          // Usually we reject here, but for auto-reconnect logic we might want to retry.
+          // For now, let's respect the promise rejection for the UI feedback, 
+          // but if it was an "auto" reconnect attempt, we should keep trying.
           reject(err);
         } else {
           console.log('Port opened:', path);
@@ -59,11 +76,17 @@ export class SerialService extends EventEmitter {
             console.log('Port closed');
             this.isConnected = false;
             this.emitStatus('disconnected');
+            if (this.shouldReconnect) {
+              this.scheduleReconnect();
+            }
           });
           this.port?.on('error', (err) => {
             console.error('Port error:', err);
             this.isConnected = false;
             this.emitStatus('error', err.message);
+            if (this.shouldReconnect) {
+              this.scheduleReconnect();
+            }
           });
           
           resolve();
@@ -72,7 +95,29 @@ export class SerialService extends EventEmitter {
     });
   }
 
+  private scheduleReconnect() {
+    if (this.reconnectTimeout) return;
+    console.log('Scheduling reconnect in 2s...');
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null;
+      if (this.shouldReconnect && this.lastPath) {
+        console.log('Attempting to reconnect...');
+        this.connect(this.lastPath, this.lastBaudRate).catch(err => {
+          console.error('Reconnect failed:', err);
+          // If failed, schedule another one
+          if (this.shouldReconnect) this.scheduleReconnect();
+        });
+      }
+    }, 2000);
+  }
+
   async disconnect() {
+    this.shouldReconnect = false;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     if (this.port && this.port.isOpen) {
       return new Promise<void>((resolve) => {
         this.port?.close(() => {
@@ -135,7 +180,7 @@ export class SerialService extends EventEmitter {
       
       if (headerIndex === -1) {
         // Discard all but keep enough bytes that might match header start
-        if (this.buffer.length > 1024) this.buffer = Buffer.alloc(0);
+        if (this.buffer.length > 4096) this.buffer = Buffer.alloc(0);
         break;
       }
 

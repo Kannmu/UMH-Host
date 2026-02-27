@@ -1,16 +1,5 @@
 import { IPC_CHANNELS, DeviceCommand, StimulationType } from '../shared/types';
 
-declare global {
-  interface Window {
-    ipcRenderer: {
-      invoke: (channel: string, ...args: any[]) => Promise<any>;
-      on: (channel: string, listener: (event: any, ...args: any[]) => void) => void;
-      off: (channel: string, listener: (...args: any[]) => void) => void;
-      send: (channel: string, ...args: any[]) => void;
-    };
-  }
-}
-
 export const deviceService = {
   listPorts: () => window.ipcRenderer.invoke(IPC_CHANNELS.SERIAL_LIST),
   

@@ -1,11 +1,9 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { SerialService } from './services/SerialService'
-import { IPC_CHANNELS, DeviceCommand } from '../src/shared/types'
+import { IPC_CHANNELS } from '../src/shared/types'
 
-const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // The built directory structure
@@ -31,11 +29,12 @@ const serialService = new SerialService()
 
 function createWindow() {
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
+    title: 'UMH Host',
+    icon: path.join(process.env.VITE_PUBLIC, 'umh-host.svg'),
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.mjs'),
+      preload: path.join(__dirname, 'preload.cjs'),
       sandbox: false, // Ensure Node integration if needed, though contextBridge is safer
     },
   })
@@ -64,8 +63,8 @@ ipcMain.handle(IPC_CHANNELS.SERIAL_CONNECT, async (_event, path, baudRate) => {
   try {
     await serialService.connect(path, baudRate)
     return { success: true }
-  } catch (error: any) {
-    return { success: false, error: error.message }
+  } catch (error) {
+    return { success: false, error: (error as Error).message }
   }
 })
 

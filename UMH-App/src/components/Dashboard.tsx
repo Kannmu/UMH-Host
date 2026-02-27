@@ -89,7 +89,15 @@ export const Dashboard: React.FC = () => {
   );
 };
 
-const StatusCard = ({ title, value, unit, icon: Icon, color }: any) => (
+interface StatusCardProps {
+  title: string;
+  value: string | undefined;
+  unit: string;
+  icon: React.ElementType;
+  color: string;
+}
+
+const StatusCard = ({ title, value, unit, icon: Icon, color }: StatusCardProps) => (
   <div className="p-4 rounded-xl border border-border bg-card shadow-sm flex items-center justify-between transition-all hover:shadow-md">
     <div>
       <p className="text-sm text-muted-foreground font-medium">{title}</p>
