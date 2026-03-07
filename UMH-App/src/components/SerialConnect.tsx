@@ -6,7 +6,7 @@ import { SerialPortInfo } from '../shared/types';
 import clsx from 'clsx';
 
 export const SerialConnect: React.FC = () => {
-  const { connectionStatus } = useDeviceStore();
+  const { connectionStatus, connectionError } = useDeviceStore();
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
   const [selectedPort, setSelectedPort] = useState<string>('');
   const [baudRate, setBaudRate] = useState<number>(115200);
@@ -115,6 +115,12 @@ export const SerialConnect: React.FC = () => {
           <Link2 className="w-4 h-4" />
           {connectionStatus === 'connecting' ? 'Connecting...' : 'Connect'}
         </button>
+      )}
+
+      {connectionStatus === 'error' && connectionError && (
+        <div className="max-w-[260px] truncate text-xs text-red-600" title={connectionError}>
+          {connectionError}
+        </div>
       )}
     </div>
   );

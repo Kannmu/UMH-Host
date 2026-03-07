@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useDeviceStore } from '../store/useDeviceStore';
 import { TemperatureMonitorChart } from './charts/TemperatureMonitorChart';
 import { VoltageMonitorChart } from './charts/VoltageMonitorChart';
-import { Activity, Thermometer, Cpu, Zap, Settings2, Gauge, Send, Radar } from 'lucide-react';
+import { Activity, Thermometer, Cpu, Zap, Settings2, Gauge, Send, Radar, AlertTriangle } from 'lucide-react';
 import { deviceService } from '../services/device';
 import { DeviceResponse, StimulationType } from '../shared/types';
 
@@ -17,6 +17,8 @@ interface TelemetryPoint {
 const DEFAULT_HISTORY_WINDOW_SECONDS = 5;
 const MIN_HISTORY_WINDOW_SECONDS = 1;
 const MAX_HISTORY_WINDOW_SECONDS = 120;
+const STATUS_STALE_MS = 1200;
+const STATUS_LOST_MS = 4000;
 
 const clampHistoryWindowSeconds = (value: number) => {
   if (!Number.isFinite(value)) {
@@ -70,11 +72,12 @@ const formatDurationFromSeconds = (seconds: number | undefined): { value: string
 };
 
 export const Dashboard: React.FC = () => {
-  const { status, config, connectionStatus, lastPing, lastAck } = useDeviceStore();
+  const { status, config, connectionStatus, lastPing, lastAck, lastStatusAt, lastConfigAt } = useDeviceStore();
   const [history, setHistory] = useState<TelemetryPoint[]>([]);
   const [historyWindowSeconds, setHistoryWindowSeconds] = useState(DEFAULT_HISTORY_WINDOW_SECONDS);
   const [outputEnabled, setOutputEnabled] = useState(true);
   const [demoIndex, setDemoIndex] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const [stimType, setStimType] = useState<StimulationType>(StimulationType.POINT);
   const [x, setX] = useState(0);
@@ -92,6 +95,16 @@ export const Dashboard: React.FC = () => {
   const [normalY, setNormalY] = useState(0);
   const [normalZ, setNormalZ] = useState(1);
   const [radius, setRadius] = useState(0.004);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 500);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (status) {
@@ -121,6 +134,15 @@ export const Dashboard: React.FC = () => {
 
   const loopFreq = useMemo(() => formatFrequency(status?.loopFreq), [status?.loopFreq]);
   const dmaTime = useMemo(() => formatDurationFromSeconds(status?.dmaUpdateStats), [status?.dmaUpdateStats]);
+  const statusAgeMs = lastStatusAt ? Math.max(0, nowMs - lastStatusAt) : null;
+  const isStatusStale = statusAgeMs !== null && statusAgeMs > STATUS_STALE_MS;
+  const isStatusLost = statusAgeMs !== null && statusAgeMs > STATUS_LOST_MS;
+  const statusFreshnessLabel =
+    statusAgeMs === null
+      ? '--'
+      : `${formatSignificant(statusAgeMs / 1000, statusAgeMs >= 10000 ? 3 : 4)} s ago`;
+  const configFreshnessLabel =
+    lastConfigAt === null ? '--' : `${formatSignificant(Math.max(0, nowMs - lastConfigAt) / 1000)} s ago`;
 
   const sendStimulation = () => {
     if (stimType === StimulationType.POINT) {
@@ -180,6 +202,15 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {isStatusStale && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle className="h-4 w-4" />
+          {isStatusLost
+            ? 'Status stream lost. Latest telemetry is stale; check cable/link and poll command path.'
+            : 'Status updates are delayed. Displayed telemetry may lag behind device state.'}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatusCard 
           title="VDDA" 
@@ -306,7 +337,7 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-sm">
             <div className="p-3 rounded-lg bg-secondary/30 border border-border">
               <p className="text-muted-foreground">Ping RTT</p>
               <p className="font-semibold tabular-nums">{pingRttLabel}</p>
@@ -318,6 +349,14 @@ export const Dashboard: React.FC = () => {
             <div className="p-3 rounded-lg bg-secondary/30 border border-border">
               <p className="text-muted-foreground">Last ACK</p>
               <p className="font-semibold">{ackLabel}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-secondary/30 border border-border">
+              <p className="text-muted-foreground">Status Freshness</p>
+              <p className="font-semibold tabular-nums">{statusFreshnessLabel}</p>
+            </div>
+            <div className="p-3 rounded-lg bg-secondary/30 border border-border">
+              <p className="text-muted-foreground">Config Freshness</p>
+              <p className="font-semibold tabular-nums">{configFreshnessLabel}</p>
             </div>
           </div>
 

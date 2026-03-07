@@ -13,7 +13,9 @@ interface DeviceState {
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   connectionError: string | null;
   config: DeviceConfig | null;
+  lastConfigAt: number | null;
   status: DeviceStatus | null;
+  lastStatusAt: number | null;
   lastPing: PingAckPayload | null;
   lastAck: DeviceAckPayload | null;
   transducerLayout: TransducerPosition[];
@@ -30,17 +32,51 @@ export const useDeviceStore = create<DeviceState>((set) => ({
   connectionStatus: 'disconnected',
   connectionError: null,
   config: null,
+  lastConfigAt: null,
   status: null,
+  lastStatusAt: null,
   lastPing: null,
   lastAck: null,
   transducerLayout: [],
 
-  setConnectionStatus: (payload) => set({ 
-    connectionStatus: payload.status, 
-    connectionError: payload.error || null 
-  }),
-  setConfig: (config) => set({ config }),
-  setStatus: (status) => set({ status }),
+  setConnectionStatus: (payload) =>
+    set(() => {
+      if (payload.status === 'connecting') {
+        return {
+          connectionStatus: payload.status,
+          connectionError: payload.error || null,
+          config: null,
+          lastConfigAt: null,
+          status: null,
+          lastStatusAt: null,
+          lastPing: null,
+          lastAck: null,
+          transducerLayout: [],
+        };
+      }
+
+      const isDisconnected = payload.status === 'disconnected' || payload.status === 'error';
+      if (!isDisconnected) {
+        return {
+          connectionStatus: payload.status,
+          connectionError: payload.error || null,
+        };
+      }
+
+      return {
+        connectionStatus: payload.status,
+        connectionError: payload.error || null,
+        config: null,
+        lastConfigAt: null,
+        status: null,
+        lastStatusAt: null,
+        lastPing: null,
+        lastAck: null,
+        transducerLayout: [],
+      };
+    }),
+  setConfig: (config) => set({ config, lastConfigAt: Date.now() }),
+  setStatus: (status) => set({ status, lastStatusAt: Date.now() }),
   setLastPing: (ping) => set({ lastPing: ping }),
   setLastAck: (ack) => set({ lastAck: ack }),
   setTransducerLayout: (layout) => set({ transducerLayout: layout }),
