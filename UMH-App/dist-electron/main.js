@@ -1,35 +1,13 @@
-var __defProp = Object.defineProperty;
-var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
-var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
-import { ipcMain, app, BrowserWindow } from "electron";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-import { SerialPort } from "serialport";
-import { EventEmitter } from "events";
-var DeviceCommand = /* @__PURE__ */ ((DeviceCommand2) => {
-  DeviceCommand2[DeviceCommand2["ENABLE_DISABLE"] = 1] = "ENABLE_DISABLE";
-  DeviceCommand2[DeviceCommand2["PING"] = 2] = "PING";
-  DeviceCommand2[DeviceCommand2["GET_CONFIG"] = 3] = "GET_CONFIG";
-  DeviceCommand2[DeviceCommand2["GET_STATUS"] = 4] = "GET_STATUS";
-  DeviceCommand2[DeviceCommand2["SET_STIMULATION"] = 5] = "SET_STIMULATION";
-  DeviceCommand2[DeviceCommand2["SET_PHASES"] = 6] = "SET_PHASES";
-  DeviceCommand2[DeviceCommand2["SET_DEMO"] = 7] = "SET_DEMO";
-  DeviceCommand2[DeviceCommand2["GET_TRANSDUCER_INFO"] = 8] = "GET_TRANSDUCER_INFO";
-  return DeviceCommand2;
-})(DeviceCommand || {});
-var DeviceResponse = /* @__PURE__ */ ((DeviceResponse2) => {
-  DeviceResponse2[DeviceResponse2["ACK"] = 128] = "ACK";
-  DeviceResponse2[DeviceResponse2["NACK"] = 129] = "NACK";
-  DeviceResponse2[DeviceResponse2["PING_ACK"] = 130] = "PING_ACK";
-  DeviceResponse2[DeviceResponse2["RETURN_CONFIG"] = 131] = "RETURN_CONFIG";
-  DeviceResponse2[DeviceResponse2["RETURN_STATUS"] = 132] = "RETURN_STATUS";
-  DeviceResponse2[DeviceResponse2["SACK"] = 133] = "SACK";
-  DeviceResponse2[DeviceResponse2["DEMO_ACK"] = 134] = "DEMO_ACK";
-  DeviceResponse2[DeviceResponse2["TRANSDUCER_INFO"] = 135] = "TRANSDUCER_INFO";
-  DeviceResponse2[DeviceResponse2["ERROR"] = 255] = "ERROR";
-  return DeviceResponse2;
-})(DeviceResponse || {});
-const IPC_CHANNELS = {
+var V = Object.defineProperty;
+var G = (n, r, t) => r in n ? V(n, r, { enumerable: !0, configurable: !0, writable: !0, value: t }) : n[r] = t;
+var c = (n, r, t) => G(n, typeof r != "symbol" ? r + "" : r, t);
+import { ipcMain as C, app as I, BrowserWindow as w } from "electron";
+import { fileURLToPath as D } from "node:url";
+import T from "node:path";
+import { SerialPort as p } from "serialport";
+import { EventEmitter as x } from "events";
+var _ = /* @__PURE__ */ ((n) => (n[n.ENABLE_DISABLE = 1] = "ENABLE_DISABLE", n[n.PING = 2] = "PING", n[n.GET_CONFIG = 3] = "GET_CONFIG", n[n.GET_STATUS = 4] = "GET_STATUS", n[n.SET_STIMULATION = 5] = "SET_STIMULATION", n[n.SET_PHASES = 6] = "SET_PHASES", n[n.SET_DEMO = 7] = "SET_DEMO", n[n.GET_TRANSDUCER_INFO = 8] = "GET_TRANSDUCER_INFO", n))(_ || {}), d = /* @__PURE__ */ ((n) => (n[n.ACK = 128] = "ACK", n[n.NACK = 129] = "NACK", n[n.PING_ACK = 130] = "PING_ACK", n[n.RETURN_CONFIG = 131] = "RETURN_CONFIG", n[n.RETURN_STATUS = 132] = "RETURN_STATUS", n[n.SACK = 133] = "SACK", n[n.DEMO_ACK = 134] = "DEMO_ACK", n[n.TRANSDUCER_INFO = 135] = "TRANSDUCER_INFO", n[n.ERROR = 255] = "ERROR", n))(d || {});
+const a = {
   SERIAL_CONNECT: "serial:connect",
   SERIAL_DISCONNECT: "serial:disconnect",
   SERIAL_LIST: "serial:list",
@@ -46,530 +24,379 @@ const IPC_CHANNELS = {
   // Event
   DEVICE_ACK: "device:ack"
   // Event
-};
-const HEADER_BYTE_1 = 170;
-const HEADER_BYTE_2 = 85;
-const TAIL_BYTE_1 = 13;
-const TAIL_BYTE_2 = 10;
-const FRAME_MIN_LENGTH = 7;
-const MAX_TRANSDUCER_INFO_BATCH = 21;
-class ProtocolParser {
+}, g = 170, P = 85, R = 13, N = 10, K = 7, U = 21;
+class L {
   constructor() {
-    __publicField(this, "buffer", Buffer.alloc(0));
+    c(this, "buffer", Buffer.alloc(0));
   }
-  push(chunk) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    const frames = [];
-    while (this.buffer.length >= FRAME_MIN_LENGTH) {
-      const headerIndex = this.findHeader();
-      if (headerIndex < 0) {
-        if (this.buffer.length > 4096) {
-          this.buffer = Buffer.alloc(0);
-        }
+  push(r) {
+    this.buffer = Buffer.concat([this.buffer, r]);
+    const t = [];
+    for (; this.buffer.length >= K; ) {
+      const e = this.findHeader();
+      if (e < 0) {
+        this.buffer.length > 4096 && (this.buffer = Buffer.alloc(0));
         break;
       }
-      if (headerIndex > 0) {
-        this.buffer = this.buffer.subarray(headerIndex);
-      }
-      if (this.buffer.length < 4) {
+      if (e > 0 && (this.buffer = this.buffer.subarray(e)), this.buffer.length < 4)
         break;
-      }
-      const dataLen = this.buffer[3];
-      const frameLen = 2 + 1 + 1 + dataLen + 1 + 2;
-      if (this.buffer.length < frameLen) {
+      const s = this.buffer[3], i = 4 + s + 1 + 2;
+      if (this.buffer.length < i)
         break;
-      }
-      const frame = this.buffer.subarray(0, frameLen);
-      if (!this.isTailValid(frame, dataLen) || !this.isChecksumValid(frame, dataLen)) {
+      const o = this.buffer.subarray(0, i);
+      if (!this.isTailValid(o, s) || !this.isChecksumValid(o, s)) {
         this.buffer = this.buffer.subarray(1);
         continue;
       }
-      frames.push({
-        cmdType: frame[2],
-        data: frame.subarray(4, 4 + dataLen)
-      });
-      this.buffer = this.buffer.subarray(frameLen);
+      t.push({
+        cmdType: o[2],
+        data: o.subarray(4, 4 + s)
+      }), this.buffer = this.buffer.subarray(i);
     }
-    return frames;
+    return t;
   }
   reset() {
     this.buffer = Buffer.alloc(0);
   }
-  static buildFrame(cmdType, payload = Buffer.alloc(0)) {
-    const length = payload.length;
-    const frame = Buffer.alloc(2 + 1 + 1 + length + 1 + 2);
-    let offset = 0;
-    frame.writeUInt8(HEADER_BYTE_1, offset++);
-    frame.writeUInt8(HEADER_BYTE_2, offset++);
-    frame.writeUInt8(cmdType, offset++);
-    frame.writeUInt8(length, offset++);
-    if (length > 0) {
-      payload.copy(frame, offset);
-      offset += length;
-    }
-    let sum = cmdType + length;
-    for (const byte of payload) {
-      sum += byte;
-    }
-    frame.writeUInt8(sum & 255, offset++);
-    frame.writeUInt8(TAIL_BYTE_1, offset++);
-    frame.writeUInt8(TAIL_BYTE_2, offset);
-    return frame;
+  static buildFrame(r, t = Buffer.alloc(0)) {
+    const e = t.length, s = Buffer.alloc(4 + e + 1 + 2);
+    let i = 0;
+    s.writeUInt8(g, i++), s.writeUInt8(P, i++), s.writeUInt8(r, i++), s.writeUInt8(e, i++), e > 0 && (t.copy(s, i), i += e);
+    let o = r + e;
+    for (const u of t)
+      o += u;
+    return s.writeUInt8(o & 255, i++), s.writeUInt8(R, i++), s.writeUInt8(N, i), s;
   }
   findHeader() {
-    for (let i = 0; i < this.buffer.length - 1; i++) {
-      if (this.buffer[i] === HEADER_BYTE_1 && this.buffer[i + 1] === HEADER_BYTE_2) {
-        return i;
-      }
-    }
+    for (let r = 0; r < this.buffer.length - 1; r++)
+      if (this.buffer[r] === g && this.buffer[r + 1] === P)
+        return r;
     return -1;
   }
-  isTailValid(frame, dataLen) {
-    return frame[4 + dataLen + 1] === TAIL_BYTE_1 && frame[4 + dataLen + 2] === TAIL_BYTE_2;
+  isTailValid(r, t) {
+    return r[4 + t + 1] === R && r[4 + t + 2] === N;
   }
-  isChecksumValid(frame, dataLen) {
-    const cmdType = frame[2];
-    const expectedChecksum = frame[4 + dataLen];
-    let sum = cmdType + dataLen;
-    for (let i = 0; i < dataLen; i++) {
-      sum += frame[4 + i];
-    }
-    return (sum & 255) === expectedChecksum;
+  isChecksumValid(r, t) {
+    const e = r[2], s = r[4 + t];
+    let i = e + t;
+    for (let o = 0; o < t; o++)
+      i += r[4 + o];
+    return (i & 255) === s;
   }
 }
-class SerialService extends EventEmitter {
+class k extends x {
   constructor() {
     super();
-    __publicField(this, "port", null);
-    __publicField(this, "mainWindow", null);
-    __publicField(this, "isConnected", false);
-    __publicField(this, "shouldReconnect", false);
-    __publicField(this, "lastPath", "");
-    __publicField(this, "lastBaudRate", 115200);
-    __publicField(this, "reconnectTimeout", null);
-    __publicField(this, "statusPollTimer", null);
-    __publicField(this, "protocolParser", new ProtocolParser());
-    __publicField(this, "pendingPingTimestamps", /* @__PURE__ */ new Map());
-    __publicField(this, "expectedTransducerCount", 0);
-    __publicField(this, "transducerPositions", []);
+    c(this, "port", null);
+    c(this, "mainWindow", null);
+    c(this, "isConnected", !1);
+    c(this, "shouldReconnect", !1);
+    c(this, "lastPath", "");
+    c(this, "lastBaudRate", 115200);
+    c(this, "reconnectTimeout", null);
+    c(this, "statusPollTimer", null);
+    c(this, "protocolParser", new L());
+    c(this, "pendingPingTimestamps", /* @__PURE__ */ new Map());
+    c(this, "expectedTransducerCount", 0);
+    c(this, "transducerPositions", []);
   }
-  setMainWindow(window) {
-    this.mainWindow = window;
+  setMainWindow(t) {
+    this.mainWindow = t;
   }
-  safeSend(channel, payload) {
-    if (!this.mainWindow) {
-      return;
-    }
-    if (this.mainWindow.isDestroyed() || this.mainWindow.webContents.isDestroyed()) {
-      this.mainWindow = null;
-      return;
-    }
-    try {
-      this.mainWindow.webContents.send(channel, payload);
-    } catch (error) {
-      console.error(`[SerialService] Failed to send ${channel}:`, error);
+  safeSend(t, e) {
+    if (this.mainWindow) {
+      if (this.mainWindow.isDestroyed() || this.mainWindow.webContents.isDestroyed()) {
+        this.mainWindow = null;
+        return;
+      }
+      try {
+        this.mainWindow.webContents.send(t, e);
+      } catch (s) {
+        console.error(`[SerialService] Failed to send ${t}:`, s);
+      }
     }
   }
   async listPorts() {
-    return await SerialPort.list();
+    return await p.list();
   }
-  async connect(path2, baudRate = 115200) {
-    if (this.isConnected) {
-      await this.disconnect();
-    }
-    this.shouldReconnect = true;
-    this.lastPath = path2;
-    this.lastBaudRate = baudRate;
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    this.emitStatus("connecting");
-    return new Promise((resolve, reject) => {
-      this.port = new SerialPort({ path: path2, baudRate, autoOpen: false });
-      this.port.open((err) => {
-        var _a, _b, _c;
-        if (err) {
-          console.error("Error opening port:", err);
-          this.emitStatus("error", err.message);
-          this.isConnected = false;
-          reject(err);
-        } else {
-          console.log("Port opened:", path2);
-          this.isConnected = true;
-          this.protocolParser.reset();
-          this.resetTransducerLayoutState();
-          this.emitStatus("connected");
-          (_a = this.port) == null ? void 0 : _a.on("data", (data) => this.handleData(data));
-          (_b = this.port) == null ? void 0 : _b.on("close", () => {
-            console.log("Port closed");
-            this.isConnected = false;
-            this.stopStatusPolling();
-            this.emitStatus("disconnected");
-            if (this.shouldReconnect) {
-              this.scheduleReconnect();
-            }
-          });
-          (_c = this.port) == null ? void 0 : _c.on("error", (err2) => {
-            console.error("Port error:", err2);
-            this.isConnected = false;
-            this.stopStatusPolling();
-            this.emitStatus("error", err2.message);
-            if (this.shouldReconnect) {
-              this.scheduleReconnect();
-            }
-          });
-          this.startStatusPolling();
-          this.requestConfig();
-          this.sendPing();
-          resolve();
-        }
+  async connect(t, e = 115200) {
+    return this.isConnected && await this.disconnect(), this.shouldReconnect = !0, this.lastPath = t, this.lastBaudRate = e, this.reconnectTimeout && (clearTimeout(this.reconnectTimeout), this.reconnectTimeout = null), this.emitStatus("connecting"), new Promise((s, i) => {
+      this.port = new p({ path: t, baudRate: e, autoOpen: !1 }), this.port.open((o) => {
+        var u, l, S;
+        o ? (console.error("Error opening port:", o), this.emitStatus("error", o.message), this.isConnected = !1, i(o)) : (console.log("Port opened:", t), this.isConnected = !0, this.protocolParser.reset(), this.resetTransducerLayoutState(), this.emitStatus("connected"), (u = this.port) == null || u.on("data", (E) => this.handleData(E)), (l = this.port) == null || l.on("close", () => {
+          console.log("Port closed"), this.isConnected = !1, this.stopStatusPolling(), this.emitStatus("disconnected"), this.shouldReconnect && this.scheduleReconnect();
+        }), (S = this.port) == null || S.on("error", (E) => {
+          console.error("Port error:", E), this.isConnected = !1, this.stopStatusPolling(), this.emitStatus("error", E.message), this.shouldReconnect && this.scheduleReconnect();
+        }), this.startStatusPolling(), this.requestConfig(), this.sendPing(), s());
       });
     });
   }
   scheduleReconnect() {
-    if (this.reconnectTimeout) return;
-    console.log("Scheduling reconnect in 2s...");
-    this.reconnectTimeout = setTimeout(() => {
-      this.reconnectTimeout = null;
-      if (this.shouldReconnect && this.lastPath) {
-        console.log("Attempting to reconnect...");
-        this.connect(this.lastPath, this.lastBaudRate).catch((err) => {
-          console.error("Reconnect failed:", err);
-          if (this.shouldReconnect) this.scheduleReconnect();
-        });
-      }
-    }, 2e3);
+    this.reconnectTimeout || (console.log("Scheduling reconnect in 2s..."), this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null, this.shouldReconnect && this.lastPath && (console.log("Attempting to reconnect..."), this.connect(this.lastPath, this.lastBaudRate).catch((t) => {
+        console.error("Reconnect failed:", t), this.shouldReconnect && this.scheduleReconnect();
+      }));
+    }, 2e3));
   }
   async disconnect() {
-    this.shouldReconnect = false;
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    if (this.port && this.port.isOpen) {
-      return new Promise((resolve) => {
-        var _a;
-        (_a = this.port) == null ? void 0 : _a.close(() => {
-          this.port = null;
-          this.isConnected = false;
-          this.stopStatusPolling();
-          this.protocolParser.reset();
-          this.resetTransducerLayoutState();
-          this.emitStatus("disconnected");
-          resolve();
+    if (this.shouldReconnect = !1, this.reconnectTimeout && (clearTimeout(this.reconnectTimeout), this.reconnectTimeout = null), this.port && this.port.isOpen)
+      return new Promise((t) => {
+        var e;
+        (e = this.port) == null || e.close(() => {
+          this.port = null, this.isConnected = !1, this.stopStatusPolling(), this.protocolParser.reset(), this.resetTransducerLayoutState(), this.emitStatus("disconnected"), t();
         });
       });
-    } else {
-      this.isConnected = false;
-      this.stopStatusPolling();
-      this.protocolParser.reset();
-      this.resetTransducerLayoutState();
-      this.emitStatus("disconnected");
-    }
+    this.isConnected = !1, this.stopStatusPolling(), this.protocolParser.reset(), this.resetTransducerLayoutState(), this.emitStatus("disconnected");
   }
-  emitStatus(status, error) {
-    this.safeSend(IPC_CHANNELS.SERIAL_STATUS, { status, error });
+  emitStatus(t, e) {
+    this.safeSend(a.SERIAL_STATUS, { status: t, error: e });
   }
-  sendCommand(cmdType, payload = Buffer.alloc(0)) {
+  sendCommand(t, e = Buffer.alloc(0)) {
     if (!this.port || !this.port.isOpen) return;
-    const frame = ProtocolParser.buildFrame(cmdType, payload);
-    this.port.write(frame);
+    const s = L.buildFrame(t, e);
+    this.port.write(s);
   }
-  sendPingWithEchoedByte(echoedByte) {
-    const pingByte = echoedByte & 255;
-    this.pendingPingTimestamps.set(pingByte, Date.now());
-    this.sendCommand(DeviceCommand.PING, Buffer.from([pingByte]));
+  sendPingWithEchoedByte(t) {
+    const e = t & 255;
+    this.pendingPingTimestamps.set(e, Date.now()), this.sendCommand(_.PING, Buffer.from([e]));
   }
-  handleData(data) {
-    const frames = this.protocolParser.push(data);
-    for (const frame of frames) {
-      this.processFrame(frame.cmdType, frame.data);
-    }
+  handleData(t) {
+    const e = this.protocolParser.push(t);
+    for (const s of e)
+      this.processFrame(s.cmdType, s.data);
   }
-  processFrame(cmdType, data) {
-    switch (cmdType) {
-      case DeviceResponse.RETURN_CONFIG:
-        this.parseConfig(data);
+  processFrame(t, e) {
+    switch (t) {
+      case d.RETURN_CONFIG:
+        this.parseConfig(e);
         break;
-      case DeviceResponse.RETURN_STATUS:
-        this.parseStatus(data);
+      case d.RETURN_STATUS:
+        this.parseStatus(e);
         break;
-      case DeviceResponse.PING_ACK:
-        this.handlePingAck(data);
+      case d.PING_ACK:
+        this.handlePingAck(e);
         break;
-      case DeviceResponse.TRANSDUCER_INFO:
-        this.parseTransducerInfo(data);
+      case d.TRANSDUCER_INFO:
+        this.parseTransducerInfo(e);
         break;
-      case DeviceResponse.ACK:
-      case DeviceResponse.NACK:
-      case DeviceResponse.SACK:
-      case DeviceResponse.DEMO_ACK:
-      case DeviceResponse.ERROR:
-        this.emitAck(cmdType, data);
+      case d.ACK:
+      case d.NACK:
+      case d.SACK:
+      case d.DEMO_ACK:
+      case d.ERROR:
+        this.emitAck(t, e);
         break;
     }
   }
   sendPing() {
-    const echoedByte = Math.floor(Math.random() * 256);
-    this.sendPingWithEchoedByte(echoedByte);
+    const t = Math.floor(Math.random() * 256);
+    this.sendPingWithEchoedByte(t);
   }
   requestConfig() {
-    this.sendCommand(DeviceCommand.GET_CONFIG);
+    this.sendCommand(_.GET_CONFIG);
   }
   requestStatus() {
-    this.sendCommand(DeviceCommand.GET_STATUS);
+    this.sendCommand(_.GET_STATUS);
   }
-  requestTransducerInfo(startIndex, count) {
-    if (!this.isConnected || count <= 0) {
+  requestTransducerInfo(t, e) {
+    if (!this.isConnected || e <= 0)
       return;
-    }
-    const payload = Buffer.from([startIndex & 255, count & 255]);
-    this.sendCommand(DeviceCommand.GET_TRANSDUCER_INFO, payload);
+    const s = Buffer.from([t & 255, e & 255]);
+    this.sendCommand(_.GET_TRANSDUCER_INFO, s);
   }
   resetTransducerLayoutState() {
-    this.expectedTransducerCount = 0;
-    this.transducerPositions = [];
-    this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+    this.expectedTransducerCount = 0, this.transducerPositions = [], this.safeSend(a.DEVICE_TRANSDUCER_LAYOUT, []);
   }
-  beginTransducerLayoutFetch(transducerCount) {
-    const roundedCount = Math.max(0, Math.min(255, Math.round(transducerCount)));
-    this.expectedTransducerCount = roundedCount;
-    this.transducerPositions = Array.from({ length: roundedCount }, () => void 0);
-    if (roundedCount === 0) {
-      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+  beginTransducerLayoutFetch(t) {
+    const e = Math.max(0, Math.min(255, Math.round(t)));
+    if (this.expectedTransducerCount = e, this.transducerPositions = Array.from({ length: e }, () => {
+    }), e === 0) {
+      this.safeSend(a.DEVICE_TRANSDUCER_LAYOUT, []);
       return;
     }
-    this.requestTransducerInfo(0, Math.min(MAX_TRANSDUCER_INFO_BATCH, roundedCount));
+    this.requestTransducerInfo(0, Math.min(U, e));
   }
   requestNextTransducerBatch() {
     if (this.expectedTransducerCount === 0) {
-      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, []);
+      this.safeSend(a.DEVICE_TRANSDUCER_LAYOUT, []);
       return;
     }
-    const nextMissingIndex = this.transducerPositions.findIndex((item) => item === void 0);
-    if (nextMissingIndex < 0) {
-      const layout = this.transducerPositions.filter((item) => item !== void 0);
-      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, layout);
+    const t = this.transducerPositions.findIndex((i) => i === void 0);
+    if (t < 0) {
+      const i = this.transducerPositions.filter((o) => o !== void 0);
+      this.safeSend(a.DEVICE_TRANSDUCER_LAYOUT, i);
       return;
     }
-    const remaining = this.expectedTransducerCount - nextMissingIndex;
-    const count = Math.min(MAX_TRANSDUCER_INFO_BATCH, remaining);
-    this.requestTransducerInfo(nextMissingIndex, count);
+    const e = this.expectedTransducerCount - t, s = Math.min(U, e);
+    this.requestTransducerInfo(t, s);
   }
-  handlePingAck(data) {
-    if (data.length < 1) {
+  handlePingAck(t) {
+    if (t.length < 1)
       return;
-    }
-    const echoedByte = data[0];
-    const sentAt = this.pendingPingTimestamps.get(echoedByte);
-    if (sentAt !== void 0) {
-      this.pendingPingTimestamps.delete(echoedByte);
-    }
-    const now = Date.now();
-    const payload = {
-      echoedByte,
-      rttMs: sentAt !== void 0 ? now - sentAt : -1,
-      receivedAt: now
+    const e = t[0], s = this.pendingPingTimestamps.get(e);
+    s !== void 0 && this.pendingPingTimestamps.delete(e);
+    const i = Date.now(), o = {
+      echoedByte: e,
+      rttMs: s !== void 0 ? i - s : -1,
+      receivedAt: i
     };
-    this.safeSend(IPC_CHANNELS.DEVICE_PING_ACK, payload);
+    this.safeSend(a.DEVICE_PING_ACK, o);
   }
-  emitAck(type, data) {
-    const payload = {
-      type,
-      dataHex: data.length > 0 ? data.toString("hex") : void 0
+  emitAck(t, e) {
+    const s = {
+      type: t,
+      dataHex: e.length > 0 ? e.toString("hex") : void 0
     };
-    this.safeSend(IPC_CHANNELS.DEVICE_ACK, payload);
+    this.safeSend(a.DEVICE_ACK, s);
   }
   startStatusPolling() {
-    this.stopStatusPolling();
-    this.statusPollTimer = setInterval(() => {
-      if (!this.isConnected) {
-        return;
-      }
-      this.requestStatus();
+    this.stopStatusPolling(), this.statusPollTimer = setInterval(() => {
+      this.isConnected && this.requestStatus();
     }, 200);
   }
   stopStatusPolling() {
-    if (this.statusPollTimer) {
-      clearInterval(this.statusPollTimer);
-      this.statusPollTimer = null;
-    }
+    this.statusPollTimer && (clearInterval(this.statusPollTimer), this.statusPollTimer = null);
   }
-  parseConfig(data) {
-    if (data.length < 33) return;
-    let offset = 0;
-    const serialNumber = data.toString("utf8", offset, offset + 12).replace(/\0/g, "");
-    offset += 12;
-    const version = data.readUInt32LE(offset);
-    offset += 4;
-    const arrayType = data.readUInt8(offset);
-    offset += 1;
-    const arraySize = data.readUInt32LE(offset);
-    offset += 4;
-    const transducerCount = data.readUInt32LE(offset);
-    offset += 4;
-    const transducerSize = data.readFloatLE(offset);
-    offset += 4;
-    const transducerSpace = data.readFloatLE(offset);
-    const config = {
-      serialNumber,
-      version,
-      arrayType,
-      arraySize,
-      transducerCount,
-      transducerSize,
-      transducerSpace
+  parseConfig(t) {
+    if (t.length < 33) return;
+    let e = 0;
+    const s = t.toString("utf8", e, e + 12).replace(/\0/g, "");
+    e += 12;
+    const i = t.readUInt32LE(e);
+    e += 4;
+    const o = t.readUInt8(e);
+    e += 1;
+    const u = t.readUInt32LE(e);
+    e += 4;
+    const l = t.readUInt32LE(e);
+    e += 4;
+    const S = t.readFloatLE(e);
+    e += 4;
+    const E = t.readFloatLE(e), A = {
+      serialNumber: s,
+      version: i,
+      arrayType: o,
+      arraySize: u,
+      transducerCount: l,
+      transducerSize: S,
+      transducerSpace: E
     };
-    this.safeSend(IPC_CHANNELS.DEVICE_CONFIG, config);
-    this.beginTransducerLayoutFetch(transducerCount);
+    this.safeSend(a.DEVICE_CONFIG, A), this.beginTransducerLayoutFetch(l);
   }
-  parseTransducerInfo(data) {
-    if (data.length < 2 || this.expectedTransducerCount <= 0) {
+  parseTransducerInfo(t) {
+    if (t.length < 2 || this.expectedTransducerCount <= 0)
       return;
-    }
-    const startIndex = data.readUInt8(0);
-    const count = data.readUInt8(1);
-    const expectedDataLength = 2 + count * 12;
-    if (data.length < expectedDataLength) {
-      return;
-    }
-    for (let i = 0; i < count; i += 1) {
-      const index = startIndex + i;
-      if (index >= this.expectedTransducerCount) {
-        continue;
+    const e = t.readUInt8(0), s = t.readUInt8(1), i = 2 + s * 12;
+    if (!(t.length < i)) {
+      for (let o = 0; o < s; o += 1) {
+        const u = e + o;
+        if (u >= this.expectedTransducerCount)
+          continue;
+        const l = 2 + o * 12;
+        this.transducerPositions[u] = {
+          x: t.readFloatLE(l),
+          y: t.readFloatLE(l + 4),
+          z: t.readFloatLE(l + 8)
+        };
       }
-      const offset = 2 + i * 12;
-      this.transducerPositions[index] = {
-        x: data.readFloatLE(offset),
-        y: data.readFloatLE(offset + 4),
-        z: data.readFloatLE(offset + 8)
-      };
+      if (s === 0) {
+        const o = this.transducerPositions.filter((u) => u !== void 0);
+        this.safeSend(a.DEVICE_TRANSDUCER_LAYOUT, o);
+        return;
+      }
+      this.requestNextTransducerBatch();
     }
-    if (count === 0) {
-      const layout = this.transducerPositions.filter((item) => item !== void 0);
-      this.safeSend(IPC_CHANNELS.DEVICE_TRANSDUCER_LAYOUT, layout);
-      return;
-    }
-    this.requestNextTransducerBatch();
   }
-  parseStatus(data) {
-    if (data.length < 33) return;
-    const hasDoubleDmaField = data.length >= 37;
-    let offset = 0;
-    const vdda = data.readFloatLE(offset);
-    offset += 4;
-    const v3v3 = data.readFloatLE(offset);
-    offset += 4;
-    const v5v0 = data.readFloatLE(offset);
-    offset += 4;
-    const temperature = data.readFloatLE(offset);
-    offset += 4;
-    let dmaUpdateStats = hasDoubleDmaField ? data.readDoubleLE(offset) : data.readFloatLE(offset);
-    if (hasDoubleDmaField) {
-      dmaUpdateStats /= 1e3;
-    }
-    offset += hasDoubleDmaField ? 8 : 4;
-    const loopFreq = data.readFloatLE(offset);
-    offset += 4;
-    const stimulationType = data.readUInt8(offset);
-    offset += 1;
-    const calibrationMode = data.readUInt32LE(offset);
-    offset += 4;
-    const phaseSetMode = data.readUInt32LE(offset);
-    offset += 4;
-    const status = {
-      vdda,
-      v3v3,
-      v5v0,
-      temperature,
-      dmaUpdateStats,
-      loopFreq,
-      stimulationType,
-      calibrationMode,
-      phaseSetMode
+  parseStatus(t) {
+    if (t.length < 33) return;
+    const e = t.length >= 37;
+    let s = 0;
+    const i = t.readFloatLE(s);
+    s += 4;
+    const o = t.readFloatLE(s);
+    s += 4;
+    const u = t.readFloatLE(s);
+    s += 4;
+    const l = t.readFloatLE(s);
+    s += 4;
+    let S = e ? t.readDoubleLE(s) : t.readFloatLE(s);
+    e && (S /= 1e3), s += e ? 8 : 4;
+    const E = t.readFloatLE(s);
+    s += 4;
+    const A = t.readUInt8(s);
+    s += 1;
+    const F = t.readUInt32LE(s);
+    s += 4;
+    const B = t.readUInt32LE(s);
+    s += 4;
+    const M = {
+      vdda: i,
+      v3v3: o,
+      v5v0: u,
+      temperature: l,
+      dmaUpdateStats: S,
+      loopFreq: E,
+      stimulationType: A,
+      calibrationMode: F,
+      phaseSetMode: B
     };
-    this.safeSend(IPC_CHANNELS.DEVICE_STATUS, status);
+    this.safeSend(a.DEVICE_STATUS, M);
   }
 }
-const __dirname$1 = path.dirname(fileURLToPath(import.meta.url));
-process.env.APP_ROOT = path.join(__dirname$1, "..");
-const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
-const MAIN_DIST = path.join(process.env.APP_ROOT, "dist-electron");
-const RENDERER_DIST = path.join(process.env.APP_ROOT, "dist");
-process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, "public") : RENDERER_DIST;
-let win;
-const serialService = new SerialService();
-function createWindow() {
-  win = new BrowserWindow({
+const b = T.dirname(D(import.meta.url));
+process.env.APP_ROOT = T.join(b, "..");
+const m = process.env.VITE_DEV_SERVER_URL, z = T.join(process.env.APP_ROOT, "dist-electron"), O = T.join(process.env.APP_ROOT, "dist");
+process.env.VITE_PUBLIC = m ? T.join(process.env.APP_ROOT, "public") : O;
+let h;
+const f = new k();
+function y() {
+  h = new w({
     title: "UMH Host",
-    icon: path.join(process.env.VITE_PUBLIC, "umh-host.svg"),
+    icon: T.join(process.env.VITE_PUBLIC, "umh-host.svg"),
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname$1, "preload.cjs"),
-      sandbox: false
+      preload: T.join(b, "preload.cjs"),
+      sandbox: !1
       // Ensure Node integration if needed, though contextBridge is safer
     }
-  });
-  serialService.setMainWindow(win);
-  win.on("closed", () => {
-    serialService.setMainWindow(null);
-    win = null;
-  });
-  win.webContents.on("did-finish-load", () => {
-    win == null ? void 0 : win.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
-  });
-  if (VITE_DEV_SERVER_URL) {
-    win.loadURL(VITE_DEV_SERVER_URL);
-  } else {
-    win.loadFile(path.join(RENDERER_DIST, "index.html"));
-  }
+  }), f.setMainWindow(h), h.on("closed", () => {
+    f.setMainWindow(null), h = null;
+  }), h.webContents.on("did-finish-load", () => {
+    h == null || h.webContents.send("main-process-message", (/* @__PURE__ */ new Date()).toLocaleString());
+  }), m ? h.loadURL(m) : h.loadFile(T.join(O, "index.html"));
 }
-ipcMain.handle(IPC_CHANNELS.SERIAL_LIST, async () => {
-  return await serialService.listPorts();
-});
-ipcMain.handle(IPC_CHANNELS.SERIAL_CONNECT, async (_event, path2, baudRate) => {
+C.handle(a.SERIAL_LIST, async () => await f.listPorts());
+C.handle(a.SERIAL_CONNECT, async (n, r, t) => {
   try {
-    await serialService.connect(path2, baudRate);
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
+    return await f.connect(r, t), { success: !0 };
+  } catch (e) {
+    return { success: !1, error: e.message };
   }
 });
-ipcMain.handle(IPC_CHANNELS.SERIAL_DISCONNECT, async () => {
-  await serialService.disconnect();
-  return { success: true };
-});
-ipcMain.on(IPC_CHANNELS.DEVICE_COMMAND, (_event, cmdType, payload) => {
-  if (payload) {
-    const buffer = Buffer.from(payload);
-    if (cmdType === DeviceCommand.PING && buffer.length >= 1) {
-      serialService.sendPingWithEchoedByte(buffer[0]);
+C.handle(a.SERIAL_DISCONNECT, async () => (await f.disconnect(), { success: !0 }));
+C.on(a.DEVICE_COMMAND, (n, r, t) => {
+  if (t) {
+    const e = Buffer.from(t);
+    if (r === _.PING && e.length >= 1) {
+      f.sendPingWithEchoedByte(e[0]);
       return;
     }
-    serialService.sendCommand(cmdType, buffer);
-  } else {
-    serialService.sendCommand(cmdType);
-  }
+    f.sendCommand(r, e);
+  } else
+    f.sendCommand(r);
 });
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    serialService.disconnect().catch((error) => {
-      console.error("Error disconnecting serial service during shutdown:", error);
-    });
-    app.quit();
-    win = null;
-  }
+I.on("window-all-closed", () => {
+  process.platform !== "darwin" && (f.disconnect().catch((n) => {
+    console.error("Error disconnecting serial service during shutdown:", n);
+  }), I.quit(), h = null);
 });
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+I.on("activate", () => {
+  w.getAllWindows().length === 0 && y();
 });
-app.whenReady().then(createWindow);
+I.whenReady().then(y);
 export {
-  MAIN_DIST,
-  RENDERER_DIST,
-  VITE_DEV_SERVER_URL
+  z as MAIN_DIST,
+  O as RENDERER_DIST,
+  m as VITE_DEV_SERVER_URL
 };
